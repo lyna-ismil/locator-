@@ -1,28 +1,26 @@
+console.log("--- Gateway app.js is starting ---"); // <-- THIS IS THE NEW DEBUGGING LINE
+
+require('dotenv').config();
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const cors = require('cors');
-const logger = require('morgan');
 const { spawn } = require('child_process');
 const path = require('path');
-const axios = require('axios'); // Added for health checks
-require('dotenv').config();
+const axios = require('axios');
 
 const app = express();
 
 // --- Middleware ---
 app.use(cors());
-app.use(logger('dev'));
+app.use(require('morgan')('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 // --- (Placeholder) Authentication Middleware ---
-// In a real application, this function would verify a JWT
 const authenticateToken = (req, res, next) => {
     console.log('Authentication middleware would run here...');
-    // For now, we'll just let all requests pass through.
     next();
 };
-
 
 // --- Microservices Configuration ---
 const services = {
@@ -64,24 +62,14 @@ const services = {
 const startMicroservices = () => {
     console.log('🚀 Starting all microservices...');
     for (const [route, service] of Object.entries(services)) {
+        const port = new URL(service.url).port;
         const microserviceProcess = spawn('node', [service.path], {
-            stdio: 'pipe', // Use 'pipe' to capture output
-            env: { ...process.env, PORT: new URL(service.url).port }
+            stdio: 'pipe',
+            env: { ...process.env, PORT: port }
         });
-
-        // Log output from the microservice
-        microserviceProcess.stdout.on('data', (data) => {
-            console.log(`[${route}] stdout: ${data}`);
-        });
-        microserviceProcess.stderr.on('data', (data) => {
-            console.error(`[${route}] stderr: ${data}`);
-        });
-
-        microserviceProcess.on('exit', (code) => {
-            console.error(`❌ Microservice for ${route} exited with code ${code}.`);
-        });
-
-        console.log(`✅ Service for route ${route} process started.`);
+        microserviceProcess.stdout.on('data', (data) => console.log(`[${route}]: ${data.toString().trim()}`));
+        microserviceProcess.stderr.on('data', (data) => console.error(`[${route} ERROR]: ${data.toString().trim()}`));
+        microserviceProcess.on('exit', (code) => console.error(`❌ Microservice for ${route} exited with code ${code}.`));
     }
 };
 
@@ -90,7 +78,6 @@ const checkHealth = async () => {
     console.log('\n🩺 Performing health checks...');
     for (const [route, service] of Object.entries(services)) {
         try {
-            // Assumes each service will have a GET /health endpoint
             await axios.get(`${service.url}/health`);
             console.log(`✅ ${route} is healthy.`);
         } catch (error) {
@@ -101,7 +88,7 @@ const checkHealth = async () => {
 
 // --- Proxy Setup ---
 for (const [route, service] of Object.entries(services)) {
-    app.use(route, authenticateToken, createProxyMiddleware({ // Auth middleware added here
+    app.use(route, authenticateToken, createProxyMiddleware({
         target: service.url,
         changeOrigin: true,
         onError: (err, req, res) => {
