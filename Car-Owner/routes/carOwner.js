@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcryptjs');
+const bcrypt = require('../../admin/node_modules/bcryptjs/umd');
 
 // Import the CarOwner model
 const CarOwner = require('../models/CarOwner');
