@@ -8,6 +8,12 @@ const adminRouter = require('./routes/admin');
 
 const app = express();
 
+// --- DEBUGGING: Log the request as soon as it arrives ---
+app.use((req, res, next) => {
+    console.log(`✅ Admin service received a request: ${req.method} ${req.originalUrl}`);
+    next();
+});
+
 // --- Middleware ---
 app.use(cors());
 app.use(logger('dev'));
@@ -38,14 +44,10 @@ mongoose.connect(MONGO_URI)
 app.use('/', adminRouter);
 
 // --- Health & Debug Routes ---
-// Health check for the gateway
-// Note: This is already defined in your routes/admin.js, so this one could be removed
-// but it's okay to have it here as well.
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'UP', message: 'Admin service is running.' });
 });
 
-// Database connection status check
 app.get('/debug/database', (req, res) => {
     const dbState = mongoose.connection.readyState;
     // 1 means connected.
