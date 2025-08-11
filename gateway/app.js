@@ -3,29 +3,22 @@ const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const cors = require('cors');
 const { spawn } = require('child_process');
-const axios = require('axios');
 const path = require('path');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const axios = require('axios');
 
 const app = express();
 const PORT = process.env.GATEWAY_PORT || 3000;
 
-// Note: You must create an 'auth.js' file that exports 'authRouter' and 'verifyToken'.
-// const { authRouter, verifyToken } = require('./auth');
-
-// ✅ Logging Middleware
+// --- Middleware ---
 app.use(morgan('dev'));
-
-// ✅ CORS & Body Parser
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.get('/favicon.ico', (req, res) => res.status(204).send());
 
-// ✅ Auth Router (Placeholder)
-// app.use('/auth', authRouter);
-
-// ✅ Microservices Configuration (with paths for spawning)
+// --- Microservices Configuration (with paths for spawning) ---
 const services = {
     '/admins':        { url: 'http://localhost:3001', path: path.join(__dirname, '../admin/app.js') },
     '/car-owners':    { url: 'http://localhost:3002', path: path.join(__dirname, '../car-owner/app.js') },
@@ -37,7 +30,7 @@ const services = {
     '/notifications': { url: 'http://localhost:3008', path: path.join(__dirname, '../notification-service/app.js') }
 };
 
-// ✅ Rate Limiting
+// --- Rate Limiting ---
 const limiter = rateLimit({
     windowMs: (process.env.RATE_LIMIT_WINDOW || 15) * 60 * 1000,
     max: process.env.RATE_LIMIT_MAX_REQUESTS || 100,
@@ -45,8 +38,9 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// ✅ Proxy Setup
+// --- Proxy Setup ---
 const onProxyReq = (proxyReq, req, res) => {
+    // This is the critical fix that re-streams the request body.
     if (req.body) {
         const bodyData = JSON.stringify(req.body);
         proxyReq.setHeader('Content-Type', 'application/json');
@@ -56,7 +50,6 @@ const onProxyReq = (proxyReq, req, res) => {
 };
 
 Object.keys(services).forEach(route => {
-    // This proxy configuration will be used for all routes
     const proxyOptions = {
         target: services[route].url,
         changeOrigin: true,
@@ -69,23 +62,18 @@ Object.keys(services).forEach(route => {
             res.status(503).json({ error: `Service ${route} is unavailable` });
         }
     };
-
-    // Here you can add middleware like 'verifyToken' before the proxy
-    // For now, we will just use the proxy directly.
     app.use(route, createProxyMiddleware(proxyOptions));
 });
 
 
-// ✅ Start Microservices Function
+// --- Helper Functions ---
 const startMicroservices = () => {
     console.log("🚀 Starting Microservices...");
     for (const [route, service] of Object.entries(services)) {
-        console.log(`🔄 Launching ${route} microservice...`);
-        // Use 'npm start' which is more standard than calling the file directly
         const serviceDir = path.dirname(service.path);
         const microserviceProcess = spawn('npm', ['start'], {
-            cwd: serviceDir, // Set the working directory to the service's folder
-            stdio: 'inherit', // Show the service's output in the gateway's console
+            cwd: serviceDir,
+            stdio: 'inherit', // Show service logs in the gateway's terminal
             shell: true
         });
 
@@ -95,7 +83,19 @@ const startMicroservices = () => {
     }
 };
 
-// ✅ Gateway Health & Debug Endpoints
+const checkMicroserviceHealth = async () => {
+    console.log("⏳ Checking microservices health...");
+    for (const [route, service] of Object.entries(services)) {
+        try {
+            await axios.get(`${service.url}/health`);
+            console.log(`✅ ${route} is responding.`);
+        } catch (err) {
+            console.warn(`🟡 ${route} is not responding to health check.`);
+        }
+    }
+};
+
+// --- Gateway Health & Debug Endpoints ---
 app.get('/gateway/health', (req, res) => {
     res.status(200).json({ message: "API Gateway is Running 🚀" });
 });
@@ -104,16 +104,18 @@ app.get('/gateway/services', (req, res) => {
     res.status(200).json({ services: Object.keys(services) });
 });
 
-// ✅ Fallback for Not Found Routes
+// --- Fallback for Not Found Routes ---
 app.use((req, res) => {
     console.warn(`❌ Unmatched Route: ${req.method} ${req.originalUrl}`);
     res.status(404).json({ error: "Route Not Found" });
 });
 
-// ✅ Start API Gateway
+// --- Server Startup ---
 app.listen(PORT, () => {
     console.log(`🚀 API Gateway running on port ${PORT}`);
     startMicroservices();
+    // Wait a few seconds for services to start before checking their health
+    setTimeout(checkMicroserviceHealth, 5000);
 });
 
 module.exports = app;

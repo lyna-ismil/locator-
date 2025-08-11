@@ -17,14 +17,29 @@ router.get('/health', (req, res) => {
  * @access  Private
  */
 router.post('/', async (req, res) => {
-    try {
-        const newSession = new ChargingSession(req.body);
-        await newSession.save();
-        res.status(201).json(newSession);
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
+    try {
+        // 1. Destructure and validate the required fields from the body
+        const { userId, stationId, startTime } = req.body;
+        if (!userId || !stationId) {
+            return res.status(400).json({ message: 'Missing required fields: userId and stationId' });
+        }
+        
+        console.log('📦 Received valid POST body:', req.body);
+
+        // 2. Create the new session with only the data you expect
+        const newSession = new ChargingSession({
+            userId,
+            stationId,
+            startTime // and any other fields you want to allow
+        });
+        
+        await newSession.save();
+        res.status(201).json(newSession);
+
+    } catch (err) {
+        console.error('❌ POST Error:', err.message);
+        res.status(500).send('Server Error');
+    }
 });
 
 /*
