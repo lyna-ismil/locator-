@@ -1,12 +1,27 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Separator } from "@/components/ui/separator"
+import {
+  Building2,
+  Network,
+  Camera,
+  Mail,
+  Clock,
+  MapPin,
+  DollarSign,
+  Wifi,
+  Car,
+  Plus,
+  Trash2,
+  Edit3,
+} from "lucide-react"
 import type { Station } from "../types"
 
 interface EditStationModalProps {
@@ -18,149 +33,631 @@ interface EditStationModalProps {
 export function EditStationModal({ station, onClose, onStationUpdated }: EditStationModalProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formData, setFormData] = useState({
-    name: station.name,
-    networkName: station.networkName,
+    stationName: station.stationName || "",
+    network: station.network || "",
+    photoUrl: station.photoUrl || "",
+    email: station.email || "",
     address: {
       street: station.address?.street || "",
       city: station.address?.city || "",
       state: station.address?.state || "",
       zipCode: station.address?.zipCode || "",
     },
-    coordinates: { ...station.coordinates },
+    operatingHours: station.operatingHours || "",
+    location: {
+      coordinates: station.location?.coordinates || [0, 0],
+    },
+    pricing: {
+      perHour: station.pricing?.perHour ?? "",
+      perkWh: station.pricing?.perkWh ?? "",
+      sessionFee: station.pricing?.sessionFee ?? "",
+      notes: station.pricing?.notes ?? "",
+    },
+    amenities: {
+      wifi: station.amenities?.wifi ?? false,
+      restrooms: station.amenities?.restrooms ?? false,
+      food: station.amenities?.food ?? false,
+      shopping: station.amenities?.shopping ?? false,
+    },
+    connectors: station.connectors || [],
   })
+
+  const handleConnectorChange = (idx: number, field: string, value: any) => {
+    setFormData((prev) => ({
+      ...prev,
+      connectors: prev.connectors.map((c, i) => (i === idx ? { ...c, [field]: value } : c)),
+    }))
+  }
+
+  const handleAmenityChange = (field: string, value: boolean) => {
+    setFormData((prev) => ({
+      ...prev,
+      amenities: { ...prev.amenities, [field]: value },
+    }))
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsSubmitting(true)
 
     try {
-      // Prepare payload to match backend schema
       const payload = {
-        stationName: formData.name,
-        network: formData.networkName,
-        address: {
-          street: formData.address.street,
-          city: formData.address.city,
-          state: formData.address.state,
-          zipCode: formData.address.zipCode,
+        ...formData,
+        address: { ...formData.address },
+        location: {
+          type: "Point",
+          coordinates: [Number(formData.location.coordinates[0]), Number(formData.location.coordinates[1])],
         },
-        // Add other fields as needed (e.g., location, connectors, etc.)
+        pricing: { ...formData.pricing },
+        amenities: { ...formData.amenities },
+        connectors: formData.connectors,
       }
 
-      // Send PUT or PATCH request to backend
+      console.log("Update payload:", payload)
+
       const response = await fetch(`http://localhost:5000/stations/${station._id}`, {
-        method: "PUT", // or "PATCH" if your backend supports partial updates
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       })
 
       if (!response.ok) {
-        throw new Error("Failed to update station.")
+        const errorText = await response.text()
+        console.error("Backend error:", errorText)
+        throw new Error("Failed to update station. " + errorText)
       }
 
       onStationUpdated()
     } catch (error) {
       console.error("Failed to update station:", error)
+      // Optionally show error to user
     } finally {
       setIsSubmitting(false)
     }
   }
 
+  const amenityIcons = {
+    wifi: Wifi,
+    restrooms: Building2,
+    food: Car, // Replace with a more suitable food icon if available
+    shopping: Network, // Replace with a more suitable shopping icon if available
+  }
+
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Edit Station: {station.name}</DialogTitle>
+      <DialogContent className="max-w-4xl overflow-y-auto max-h-[90vh] bg-gradient-to-br from-white via-emerald-50/30 to-lime-50/20">
+        <DialogHeader className="pb-6">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-emerald-100 rounded-lg">
+              <Edit3 className="h-5 w-5 text-emerald-600" />
+            </div>
+            <div>
+              <DialogTitle className="text-2xl font-bold text-gray-900">Edit Station</DialogTitle>
+              <p className="text-sm text-gray-600 mt-1">Update information for {station.stationName}</p>
+            </div>
+          </div>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="name">Station Name</Label>
-              <Input
-                id="name"
-                value={formData.name}
-                onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
-                required
-              />
-            </div>
-            <div>
-              <Label htmlFor="network">Network Name</Label>
-              <Input
-                id="network"
-                value={formData.networkName}
-                onChange={(e) => setFormData((prev) => ({ ...prev, networkName: e.target.value }))}
-                required
-              />
-            </div>
-          </div>
+        <form onSubmit={handleSubmit} className="space-y-8">
+          <Card className="border-emerald-200/50 bg-white/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-shadow">
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-lg text-gray-900">
+                <Building2 className="h-5 w-5 text-emerald-600" />
+                Basic Information
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <Label htmlFor="stationName" className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                    <Building2 className="h-4 w-4 text-emerald-600" />
+                    Station Name
+                  </Label>
+                  <Input
+                    id="stationName"
+                    value={formData.stationName}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, stationName: e.target.value }))}
+                    required
+                    className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="network" className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                    <Network className="h-4 w-4 text-emerald-600" />
+                    Network Name
+                  </Label>
+                  <Input
+                    id="network"
+                    value={formData.network}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, network: e.target.value }))}
+                    required
+                    className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
 
-          <div>
-            <Label htmlFor="street">Street Address</Label>
-            <Input
-              id="street"
-              value={formData.address.street}
-              onChange={(e) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  address: { ...prev.address, street: e.target.value },
-                }))
-              }
-              required
-            />
-          </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <Label htmlFor="photoUrl" className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                    <Camera className="h-4 w-4 text-emerald-600" />
+                    Photo URL
+                  </Label>
+                  <Input
+                    id="photoUrl"
+                    value={formData.photoUrl}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, photoUrl: e.target.value }))}
+                    className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="email" className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                    <Mail className="h-4 w-4 text-emerald-600" />
+                    Contact Email
+                  </Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, email: e.target.value }))}
+                    required
+                    className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <Label htmlFor="city">City</Label>
-              <Input
-                id="city"
-                value={formData.address.city}
-                onChange={(e) =>
+          <Card className="border-emerald-200/50 bg-white/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-shadow">
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-lg text-gray-900">
+                <Clock className="h-5 w-5 text-emerald-600" />
+                Operating Hours
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => (
+                  <div
+                    key={day}
+                    className="flex items-center gap-4 p-3 bg-gray-50/50 rounded-lg border border-gray-200/50"
+                  >
+                    <div className="w-20 font-medium text-gray-700">{day}</div>
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={!(formData.operatingHours?.[day]?.isClosed ?? true)}
+                          onChange={(e) =>
+                            setFormData((prev) => ({
+                              ...prev,
+                              operatingHours: {
+                                ...prev.operatingHours,
+                                [day]: {
+                                  ...prev.operatingHours?.[day],
+                                  isClosed: !e.target.checked,
+                                },
+                              },
+                            }))
+                          }
+                          className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span className="text-sm font-medium text-gray-700">Open</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.operatingHours?.[day]?.is24Hours ?? false}
+                          onChange={(e) =>
+                            setFormData((prev) => ({
+                              ...prev,
+                              operatingHours: {
+                                ...prev.operatingHours,
+                                [day]: {
+                                  ...prev.operatingHours?.[day],
+                                  is24Hours: e.target.checked,
+                                },
+                              },
+                            }))
+                          }
+                          disabled={formData.operatingHours?.[day]?.isClosed ?? true}
+                          className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span className="text-sm font-medium text-gray-700">24h</span>
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-2 ml-auto">
+                      <Input
+                        type="time"
+                        value={formData.operatingHours?.[day]?.openTime || ""}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            operatingHours: {
+                              ...prev.operatingHours,
+                              [day]: {
+                                ...prev.operatingHours?.[day],
+                                openTime: e.target.value,
+                              },
+                            },
+                          }))
+                        }
+                        disabled={formData.operatingHours?.[day]?.isClosed ?? true || formData.operatingHours?.[day]?.is24Hours}
+                        className="w-32 border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                      />
+                      <span className="text-gray-500">-</span>
+                      <Input
+                        type="time"
+                        value={formData.operatingHours?.[day]?.closeTime || ""}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            operatingHours: {
+                              ...prev.operatingHours,
+                              [day]: {
+                                ...prev.operatingHours?.[day],
+                                closeTime: e.target.value,
+                              },
+                            },
+                          }))
+                        }
+                        disabled={!formData.operatingHours?.[day]?.isOpen || formData.operatingHours?.[day]?.is24Hours}
+                        className="w-32 border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-emerald-200/50 bg-white/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-shadow">
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-lg text-gray-900">
+                <MapPin className="h-5 w-5 text-emerald-600" />
+                Location & Address
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <Label htmlFor="street" className="text-sm font-medium text-gray-700">
+                  Street Address
+                </Label>
+                <Input
+                  id="street"
+                  value={formData.address.street}
+                  onChange={(e) =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      address: { ...prev.address, street: e.target.value },
+                    }))
+                  }
+                  required
+                  className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="city" className="text-sm font-medium text-gray-700">
+                    City
+                  </Label>
+                  <Input
+                    id="city"
+                    value={formData.address.city}
+                    onChange={(e) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        address: { ...prev.address, city: e.target.value },
+                      }))
+                    }
+                    required
+                    className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="state" className="text-sm font-medium text-gray-700">
+                    State/Region
+                  </Label>
+                  <Input
+                    id="state"
+                    value={formData.address.state}
+                    onChange={(e) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        address: { ...prev.address, state: e.target.value },
+                      }))
+                    }
+                    required
+                    className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="zip" className="text-sm font-medium text-gray-700">
+                    Zip Code
+                  </Label>
+                  <Input
+                    id="zip"
+                    value={formData.address.zipCode}
+                    onChange={(e) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        address: { ...prev.address, zipCode: e.target.value },
+                      }))
+                    }
+                    required
+                    className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-sm font-medium text-gray-700">GPS Coordinates</Label>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-gray-500">Longitude</Label>
+                    <Input
+                      type="number"
+                      step="any"
+                      placeholder="e.g., 10.1815"
+                      value={formData.location.coordinates[0]}
+                      onChange={(e) =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          location: {
+                            ...prev.location,
+                            coordinates: [Number(e.target.value), prev.location.coordinates[1]],
+                          },
+                        }))
+                      }
+                      required
+                      className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-gray-500">Latitude</Label>
+                    <Input
+                      type="number"
+                      step="any"
+                      placeholder="e.g., 36.8065"
+                      value={formData.location.coordinates[1]}
+                      onChange={(e) =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          location: {
+                            ...prev.location,
+                            coordinates: [prev.location.coordinates[0], Number(e.target.value)],
+                          },
+                        }))
+                      }
+                      required
+                      className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-emerald-200/50 bg-white/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-shadow">
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-lg text-gray-900">
+                <DollarSign className="h-5 w-5 text-emerald-600" />
+                Pricing Configuration
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium text-gray-700">Per Hour Rate</Label>
+                  <div className="relative">
+                    <DollarSign className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <Input
+                      type="number"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={formData.pricing.perHour}
+                      onChange={(e) =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          pricing: { ...prev.pricing, perHour: e.target.value },
+                        }))
+                      }
+                      className="pl-10 border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium text-gray-700">Per kWh Rate</Label>
+                  <div className="relative">
+                    <DollarSign className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <Input
+                      type="number"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={formData.pricing.perkWh}
+                      onChange={(e) =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          pricing: { ...prev.pricing, perkWh: e.target.value },
+                        }))
+                      }
+                      className="pl-10 border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium text-gray-700">Session Fee</Label>
+                  <div className="relative">
+                    <DollarSign className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <Input
+                      type="number"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={formData.pricing.sessionFee}
+                      onChange={(e) =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          pricing: { ...prev.pricing, sessionFee: e.target.value },
+                        }))
+                      }
+                      className="pl-10 border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium text-gray-700">Pricing Notes</Label>
+                  <Input
+                    type="text"
+                    placeholder="Additional pricing information"
+                    value={formData.pricing.notes}
+                    onChange={(e) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        pricing: { ...prev.pricing, notes: e.target.value },
+                      }))
+                    }
+                    className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-emerald-200/50 bg-white/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-shadow">
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-lg text-gray-900">
+                <Wifi className="h-5 w-5 text-emerald-600" />
+                Available Amenities
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {Object.entries(amenityIcons).map(([amenity, icon]) => {
+                  const IconComponent = typeof icon === "string" ? null : icon
+                  return (
+                    <label
+                      key={amenity}
+                      className="flex items-center gap-3 p-3 bg-gray-50/50 rounded-lg border border-gray-200/50 cursor-pointer hover:bg-emerald-50/50 hover:border-emerald-200 transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={formData.amenities[amenity]}
+                        onChange={(e) => handleAmenityChange(amenity, e.target.checked)}
+                        className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <div className="flex items-center gap-2">
+                        {IconComponent ? (
+                          <IconComponent className="h-4 w-4 text-emerald-600" />
+                        ) : (
+                          <span className="text-sm">{icon}</span>
+                        )}
+                        <span className="text-sm font-medium text-gray-700 capitalize">{amenity}</span>
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-emerald-200/50 bg-white/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-shadow">
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-lg text-gray-900">
+                <Car className="h-5 w-5 text-emerald-600" />
+                Charging Connectors
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {formData.connectors.length === 0 && (
+                <div className="text-center py-8 text-gray-500 bg-gray-50/50 rounded-lg border-2 border-dashed border-gray-200">
+                  <Car className="h-8 w-8 mx-auto mb-2 text-gray-400" />
+                  <p className="text-sm">No connectors added yet</p>
+                </div>
+              )}
+              {formData.connectors.map((connector, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center gap-4 p-4 bg-gray-50/50 rounded-lg border border-gray-200/50"
+                >
+                  <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <Input
+                      placeholder="Connector Type (e.g., CCS Combo 1, Type 2, CHAdeMO)"
+                      value={connector.type}
+                      onChange={(e) => handleConnectorChange(idx, "type", e.target.value)}
+                      required
+                      className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                    />
+                    <Input
+                      placeholder="Charger Level (e.g., Level 2, DC Fast)"
+                      value={connector.chargerLevel || ""}
+                      onChange={(e) => handleConnectorChange(idx, "chargerLevel", e.target.value)}
+                      required
+                      className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                    />
+                    <Input
+                      type="number"
+                      step="any"
+                      placeholder="Power (kW)"
+                      value={connector.powerKW || ""}
+                      onChange={(e) => handleConnectorChange(idx, "powerKW", e.target.value)}
+                      required
+                      className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        connectors: prev.connectors.filter((_, i) => i !== idx),
+                      }))
+                    }
+                    className="border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() =>
                   setFormData((prev) => ({
                     ...prev,
-                    address: { ...prev.address, city: e.target.value },
+                    connectors: [
+                      ...prev.connectors,
+                      { type: "", chargerLevel: "", powerKW: "" },
+                    ],
                   }))
                 }
-                required
-              />
-            </div>
-            <div>
-              <Label htmlFor="state">State/Region</Label>
-              <Input
-                id="state"
-                value={formData.address.state}
-                onChange={(e) =>
-                  setFormData((prev) => ({
-                    ...prev,
-                    address: { ...prev.address, state: e.target.value },
-                  }))
-                }
-                required
-              />
-            </div>
-            <div>
-              <Label htmlFor="zip">Zip Code</Label>
-              <Input
-                id="zip"
-                value={formData.address.zipCode}
-                onChange={(e) =>
-                  setFormData((prev) => ({
-                    ...prev,
-                    address: { ...prev.address, zipCode: e.target.value },
-                  }))
-                }
-                required
-              />
-            </div>
-          </div>
+                className="w-full border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:border-emerald-300"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Connector
+              </Button>
+            </CardContent>
+          </Card>
 
-          <div className="flex justify-end space-x-2 pt-4">
-            <Button type="button" variant="outline" onClick={onClose}>
+          <Separator className="my-8" />
+
+          <div className="flex justify-end space-x-4 pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onClose}
+              className="px-6 border-gray-300 text-gray-700 hover:bg-gray-50 bg-transparent"
+            >
               Cancel
             </Button>
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? "Updating..." : "Update Station"}
+            <Button
+              type="submit"
+              disabled={isSubmitting}
+              className="px-6 bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              {isSubmitting ? "Updating Station..." : "Update Station"}
             </Button>
           </div>
         </form>

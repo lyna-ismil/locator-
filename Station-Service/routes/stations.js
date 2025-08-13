@@ -98,22 +98,21 @@ router.get('/:id', async (req, res) => {
  * @access  Private (for Admins or Station Owners)
  */
 router.put('/:id', async (req, res) => {
-    try {
-        const station = await Station.findByIdAndUpdate(
-            req.params.id,
-            { $set: req.body },
-            { new: true } // This option returns the document after it has been updated
-        );
-
-        if (!station) {
-            return res.status(404).json({ msg: 'Station not found.' });
-        }
-
-        res.json({ msg: 'Station updated successfully.', station });
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
+  try {
+    console.log("Update payload:", req.body);
+    const station = await Station.findByIdAndUpdate(
+      req.params.id,
+      { $set: req.body },
+      { new: true, runValidators: true }
+    );
+    if (!station) {
+      return res.status(404).json({ msg: 'Station not found.' });
+    }
+    res.json({ msg: 'Station updated successfully.', station });
+  } catch (err) {
+    console.error("Update error:", err);
+    res.status(500).json({ msg: 'Server Error', error: err.message, stack: err.stack });
+  }
 });
 
 /*

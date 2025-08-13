@@ -37,6 +37,7 @@ const connectorSchema = new Schema({
     type: { type: String, required: true }, // e.g., "CCS Combo 1"
     chargerLevel: { type: String, required: true }, // e.g., "DC Fast Charger"
     powerKW: { type: Number, required: true },
+    isFast: { type: Boolean, default: false }, // <-- Add this line
     status: {
         type: String,
         enum: ['Available', 'In Use', 'Reserved', 'Faulted', 'Offline'],
@@ -45,6 +46,14 @@ const connectorSchema = new Schema({
     lastStatusUpdate: { type: Date, default: Date.now },
     reservations: [reservationSchema] // NEW: Array to hold reservations for this specific connector
 });
+
+// NEW: Operating Hours Schema
+const OperatingHoursSchema = new Schema({
+    isOpen: { type: Boolean, default: true },
+    is24Hours: { type: Boolean, default: true },
+    openTime: { type: String, default: '00:00' },
+    closeTime: { type: String, default: '23:59' }
+}, { _id: false });
 
 // UPDATED: Main schema for the 'stations' collection
 const stationSchema = new Schema({
@@ -65,7 +74,11 @@ const stationSchema = new Schema({
         state: String,
         zipCode: String
     },
-    operatingHours: { type: String, default: '24/7' },
+    operatingHours: {
+        type: Map,
+        of: OperatingHoursSchema,
+        default: {}
+    },
     connectors: [connectorSchema], // An array of connectors
     pricing: {
         perHour: Number,

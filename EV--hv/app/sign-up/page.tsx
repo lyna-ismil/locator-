@@ -129,9 +129,32 @@ export default function SignUpPage() {
     setSuccess('');
     try {
       if (userType === "driver") {
-        await apiFetch("/car-owners", {
+        if (
+          !driverForm.firstName ||
+          !driverForm.lastName ||
+          !driverForm.email ||
+          !driverForm.password ||
+          !driverForm.carMake ||
+          !driverForm.carModel ||
+          !driverForm.batteryCapacity ||
+          !driverForm.connectorType
+        ) {
+          setError("Please fill in all required fields, including vehicle details.");
+          return;
+        }
+        await apiFetch("/car-owners/register", {
           method: "POST",
-          body: JSON.stringify(driverForm),
+          body: JSON.stringify({
+            fullName: `${driverForm.firstName} ${driverForm.lastName}`,
+            email: driverForm.email,
+            password: driverForm.password,
+            vehicleDetails: {
+              make: driverForm.carMake,
+              model: driverForm.carModel,
+              primaryConnector: driverForm.connectorType,
+              batteryCapacity: driverForm.batteryCapacity,
+            },
+          }),
         });
         setSuccess("Car owner account created!");
         router.push("/sign-in");

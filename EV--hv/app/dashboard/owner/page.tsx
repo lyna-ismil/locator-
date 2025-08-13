@@ -8,10 +8,14 @@ import type { Station } from "./types"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Zap, BarChart3, Calendar, Activity, TrendingUp, Users, MapPin } from "lucide-react"
+import { Button } from "@/components/ui/button";
+import { Zap, BarChart3, Calendar, Activity, TrendingUp, Users, MapPin, Plus } from "lucide-react"
 import Spotlight from "@/components/creative/spotlight"
 import TiltCard from "@/components/creative/tilt-card"
+import { ReservationList } from "./_components/ReservationList"
+import { ConnectorEditor } from "./_components/ConnectorEditor";
+import { useRouter } from "next/navigation"
+
 
 export default function OwnerDashboard() {
   const [stations, setStations] = useState<Station[]>([])
@@ -19,13 +23,16 @@ export default function OwnerDashboard() {
   const [error, setError] = useState<string | null>(null)
   const [editingStation, setEditingStation] = useState<Station | null>(null)
   const [showAddModal, setShowAddModal] = useState(false)
+  const [todaySessions, setTodaySessions] = useState(0)
+  const [reservations, setReservations] = useState([])
+  const router = useRouter();
 
   // Central function to fetch/refresh station data
   const fetchStations = async () => {
     try {
       setIsLoading(true)
       setError(null)
-      const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null
+      const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null;
       if (!ownerId) {
         throw new Error("Owner not logged in.")
       }
@@ -48,6 +55,42 @@ export default function OwnerDashboard() {
     fetchStations()
   }, [])
 
+  // Fetch today's sessions
+  useEffect(() => {
+    const fetchTodaySessions = async () => {
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const tomorrow = new Date(today)
+      tomorrow.setDate(today.getDate() + 1)
+
+      const response = await fetch(
+        `http://localhost:5000/charging-sessions?startTime_gte=${today.toISOString()}&startTime_lt=${tomorrow.toISOString()}`
+      )
+      if (response.ok) {
+        const data = await response.json()
+        setTodaySessions(data.length)
+      } else {
+        setTodaySessions(0)
+      }
+    }
+    fetchTodaySessions()
+  }, [])
+
+  // Fetch reservations
+  useEffect(() => {
+    const fetchReservations = async () => {
+      const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null
+      const response = await fetch(`http://localhost:5000/reservations?ownerId=${ownerId}`)
+      if (response.ok) {
+        const data = await response.json()
+        setReservations(data)
+      } else {
+        setReservations([])
+      }
+    }
+    fetchReservations()
+  }, [])
+
   // Handler to open the edit modal
   const handleEdit = (station: Station | null) => {
     if (station) {
@@ -65,6 +108,13 @@ export default function OwnerDashboard() {
   const handleCloseAdd = () => {
     setShowAddModal(false)
   }
+
+  const handleLogout = () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("ownerId");
+    }
+    router.push("/sign-in");
+  };
 
   if (isLoading) {
     return (
@@ -146,9 +196,15 @@ export default function OwnerDashboard() {
             <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
               {stations.length} Station{stations.length !== 1 ? "s" : ""}
             </Badge>
+            <Button
+              onClick={handleLogout}
+              className="ml-4 bg-red-600 hover:bg-red-700 text-white"
+            >
+              Log Out
+            </Button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
             {[
               {
                 icon: MapPin,
@@ -167,16 +223,9 @@ export default function OwnerDashboard() {
               {
                 icon: Users,
                 title: "Today's Sessions",
-                value: Math.floor(Math.random() * 50) + 20,
+                value: todaySessions,
                 color: "text-purple-600",
                 bg: "bg-purple-100",
-              },
-              {
-                icon: TrendingUp,
-                title: "Revenue",
-                value: `$${(Math.random() * 500 + 200).toFixed(0)}`,
-                color: "text-amber-600",
-                bg: "bg-amber-100",
               },
             ].map((stat, i) => (
               <TiltCard key={i} className="bg-white/90 border border-gray-100 shadow-xl">
@@ -201,7 +250,7 @@ export default function OwnerDashboard() {
             <Card className="border-none shadow-none">
               <CardContent className="p-6">
                 <Tabs defaultValue="stations" className="space-y-6">
-                  <TabsList className="grid w-full grid-cols-3 bg-gray-100">
+                  <TabsList className="grid w-full grid-cols-4 bg-gray-100">
                     <TabsTrigger value="stations" className="flex items-center gap-2">
                       <MapPin className="h-4 w-4" />
                       My Stations
@@ -209,6 +258,10 @@ export default function OwnerDashboard() {
                     <TabsTrigger value="reservations" className="flex items-center gap-2">
                       <Calendar className="h-4 w-4" />
                       Reservations
+                    </TabsTrigger>
+                    <TabsTrigger value="connectors" className="flex items-center gap-2">
+                      <Activity className="h-4 w-4" />
+                      Connectors
                     </TabsTrigger>
                     <TabsTrigger value="analytics" className="flex items-center gap-2">
                       <BarChart3 className="h-4 w-4" />
@@ -222,8 +275,11 @@ export default function OwnerDashboard() {
                         <h2 className="text-xl font-semibold">Station Management</h2>
                         <p className="text-gray-600">Monitor and control your charging stations</p>
                       </div>
-                      <Button onClick={() => setShowAddModal(true)} className="bg-emerald-600 hover:bg-emerald-700">
-                        <Zap className="h-4 w-4 mr-2" />
+                      <Button
+                        onClick={() => setShowAddModal(true)}
+                        className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive text-primary-foreground shadow-xs h-9 px-4 py-2 has-[>svg]:px-3 bg-emerald-600 hover:bg-emerald-700"
+                      >
+                        <Plus className="h-4 w-4 mr-2" />
                         Add Station
                       </Button>
                     </div>
@@ -231,12 +287,30 @@ export default function OwnerDashboard() {
                   </TabsContent>
 
                   <TabsContent value="reservations" className="space-y-6">
-                    <div className="text-center py-12">
-                      <Calendar className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                      <h3 className="text-lg font-semibold text-gray-900 mb-2">Reservation Management</h3>
-                      <p className="text-gray-600">View and manage customer reservations</p>
-                      <Badge className="mt-4 bg-amber-100 text-amber-800">Coming Soon</Badge>
-                    </div>
+                    <ReservationList reservations={reservations} />
+                  </TabsContent>
+
+                  <TabsContent value="connectors" className="space-y-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-6">Connector Management</h3>
+                    {stations.length === 0 ? (
+                      <div className="text-center py-12 text-gray-500">No connectors found.</div>
+                    ) : (
+                      stations.map((station) => (
+                        <div key={station._id} className="mb-8">
+                          <div className="font-bold mb-2">{station.stationName}</div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {station.connectors.map((connector, idx) => (
+                              <ConnectorEditor
+                                key={connector._id || idx}
+                                connector={connector}
+                                stationId={station._id}
+                                fetchStations={fetchStations}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </TabsContent>
 
                   <TabsContent value="analytics" className="space-y-6">
@@ -244,9 +318,10 @@ export default function OwnerDashboard() {
                       <BarChart3 className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                       <h3 className="text-lg font-semibold text-gray-900 mb-2">Analytics & Reports</h3>
                       <p className="text-gray-600">Track performance and revenue insights</p>
-                      <Badge className="mt-4 bg-amber-100 text-amber-800">Coming Soon</Badge>
+                      <Badge className="mt-4 bg-emerald-100 text-emerald-800">Coming Soon</Badge>
                     </div>
                   </TabsContent>
+                  
                 </Tabs>
               </CardContent>
             </Card>
@@ -255,13 +330,7 @@ export default function OwnerDashboard() {
       </Spotlight>
 
       {showAddModal && (
-        <AddStationModal
-          onClose={handleCloseAdd}
-          onStationAdded={() => {
-            handleCloseAdd()
-            fetchStations()
-          }}
-        />
+        <AddStationModal open={showAddModal} setOpen={setShowAddModal} onStationAdded={fetchStations} />
       )}
 
       {editingStation && (

@@ -22,6 +22,7 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react"
+import { AddStationModal } from "./AddStationModal"
 
 interface StationListProps {
   onEdit: (station: Station | null) => void
@@ -36,6 +37,8 @@ export function StationList({ onEdit, onDataChange }: StationListProps) {
   const [connectorStatus, setConnectorStatus] = useState<Record<string, any>>({})
   const [isOnline, setIsOnline] = useState(true)
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
+  const [showModal, setShowModal] = useState(false)
+  const [modalStep, setModalStep] = useState(1)
 
   // Get logged-in ownerId from localStorage
   const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null
@@ -186,10 +189,7 @@ export function StationList({ onEdit, onDataChange }: StationListProps) {
             <p className="text-gray-600 text-center">
               You haven't added any stations yet. Click below to add your first charging station.
             </p>
-            <Button className="mt-4 bg-emerald-600 hover:bg-emerald-700" onClick={() => onEdit(null)}>
-              <Zap className="h-4 w-4 mr-2" />
-              Add Station
-            </Button>
+            
           </CardContent>
         </Card>
       </Card>
@@ -200,39 +200,96 @@ export function StationList({ onEdit, onDataChange }: StationListProps) {
   if (stations.length === 1 && (!stations[0].address?.street || !stations[0].connectors?.length)) {
     const station = stations[0]
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Your Station (Incomplete)</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="mb-2">
-            <strong>Name:</strong> {station.stationName || "N/A"}
-          </div>
-          <div className="mb-2">
-            <strong>Network:</strong> {station.network || "N/A"}
-          </div>
-          <div className="mb-2">
-            <strong>Address:</strong>{" "}
-            {station.address
-              ? [station.address.street, station.address.city, station.address.state, station.address.zipCode]
-                  .filter(Boolean)
-                  .join(", ")
-              : "N/A"}
-          </div>
-          <div className="mb-2">
-            <strong>Connectors:</strong>{" "}
-            {station.connectors && station.connectors.length > 0
-              ? station.connectors.map((c: any) => c.type).join(", ")
-              : "None added yet"}
-          </div>
-          <p className="text-amber-600 mt-4">
-            Your station profile is incomplete. Please add more details to make it available to drivers.
-          </p>
-          <Button className="mt-4" onClick={() => onEdit(station)}>
-            Complete Station Details
-          </Button>
-        </CardContent>
-      </Card>
+      <>
+        <Card>
+          <CardHeader>
+            <CardTitle>Your Station (Incomplete)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="mb-2">
+              <strong>Name:</strong> {station.stationName || "N/A"}
+            </div>
+            <div className="mb-2">
+              <strong>Network:</strong> {station.network || "N/A"}
+            </div>
+            <div className="mb-2">
+              <strong>Email:</strong> {station.email || "N/A"}
+            </div>
+            <div className="mb-2">
+              <strong>Location:</strong>{" "}
+              {station.location?.coordinates
+                ? `Lng: ${station.location.coordinates[0]}, Lat: ${station.location.coordinates[1]}`
+                : "N/A"}
+            </div>
+            <div className="mb-2">
+              <strong>Address:</strong>{" "}
+              {station.address
+                ? [station.address.street, station.address.city, station.address.state, station.address.zipCode]
+                    .filter(Boolean)
+                    .join(", ")
+                : "N/A"}
+            </div>
+            <div className="mb-2">
+              <strong>Operating Hours:</strong>
+              <ul>
+                {station.operatingHours &&
+                  Object.entries(station.operatingHours).map(([day, info]) => (
+                    <li key={day}>
+                      {day}: {info.isOpen ? (info.is24Hours ? "Open 24h" : `${info.openTime} - ${info.closeTime}`) : "Closed"}
+                    </li>
+                  ))}
+              </ul>
+            </div>
+            <div className="mb-2">
+              <strong>Connectors:</strong>{" "}
+              {station.connectors && station.connectors.length > 0
+                ? station.connectors.map((c: any, idx: number) => (
+                    <div key={idx}>
+                      <span>{c.type} ({c.chargerLevel}, {c.powerKW}kW)</span>
+                      <span> - Status: {c.status}</span>
+                    </div>
+                  ))
+                : "None added yet"}
+            </div>
+            <div className="mb-2">
+              <strong>Pricing:</strong>{" "}
+              {station.pricing
+                ? [
+                    station.pricing.perHour ? `Per Hour: $${station.pricing.perHour}` : null,
+                    station.pricing.perkWh ? `Per kWh: $${station.pricing.perkWh}` : null,
+                    station.pricing.sessionFee ? `Session Fee: $${station.pricing.sessionFee}` : null,
+                    station.pricing.notes ? `Notes: ${station.pricing.notes}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" | ")
+                : "N/A"}
+            </div>
+            <div className="mb-2">
+              <strong>Amenities:</strong>{" "}
+              {station.amenities &&
+                Object.entries(station.amenities)
+                  .filter(([_, v]) => v)
+                  .map(([k]) => k)
+                  .join(", ") || "None"}
+            </div>
+            <p className="text-amber-600 mt-4">
+              Your station profile is incomplete. Please add more details to make it available to drivers.
+            </p>
+            <Button
+  className="mt-4"
+  onClick={() => onEdit(station)}
+>
+  Complete Station Details
+</Button>
+          </CardContent>
+        </Card>
+        <AddStationModal
+          open={showModal}
+          setOpen={setShowModal}
+          startStep={modalStep}
+          onStationAdded={onDataChange}
+        />
+      </>
     )
   }
 
@@ -283,7 +340,19 @@ export function StationList({ onEdit, onDataChange }: StationListProps) {
                   </div>
                   <div className="flex items-center gap-2">
                     <Clock className="h-4 w-4 text-gray-400" />
-                    <span className="text-gray-600">{station.operatingHours || "24/7"}</span>
+                    <span className="text-gray-600">
+                      {station.operatingHours && typeof station.operatingHours === "object" ? (
+                        <ul className="list-none m-0 p-0">
+                          {Object.entries(station.operatingHours).map(([day, info]) => (
+                            <li key={day}>
+                              {day}: {info.isOpen ? (info.is24Hours ? "Open 24h" : `${info.openTime} - ${info.closeTime}`) : "Closed"}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        station.operatingHours || "24/7"
+                      )}
+                    </span>
                   </div>
                   <div className="flex items-center gap-2">
                     <DollarSign className="h-4 w-4 text-gray-400" />
