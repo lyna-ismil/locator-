@@ -36,7 +36,8 @@ router.get('/', async (req, res) => {
  * @access  Private (should be protected in a real application)
  */
 router.post('/', async (req, res) => {
-console.log('✅ Admin service received POST / request'); // <-- ADD THIS LINE
+    console.log('✅ Admin service received POST / request');
+    console.log('Received body:', req.body); // Add this line
   try {
     const { fullName, email, password } = req.body;
 

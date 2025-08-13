@@ -38,23 +38,27 @@ mongoose.connect(MONGO_URI)
 app.use('/', stationRouter);
 
 // --- Health & Debug Routes ---
-// Health check for the gateway
-app.get('/health', (req, res) => {
+// Health check for the gateway (should respond at /stations/health)
+app.get('/stations/health', (req, res) => {
     res.status(200).json({ status: 'UP', message: 'Station service is running.' });
 });
 
 // Database connection status check
-app.get('/debug/database', (req, res) => {
+app.get('/stations/debug/database', (req, res) => {
     const dbState = mongoose.connection.readyState;
     const status = dbState === 1 ? "Connected" : "Not Connected";
     res.json({ status });
 });
 
-
 // --- Generic Error Handler ---
 app.use((err, req, res, next) => {
     console.error(err.stack);
     res.status(500).json({ message: 'An internal server error occurred.' });
+});
+
+// --- 404 Handler ---
+app.use((req, res) => {
+    res.status(404).json({ message: 'Not Found' });
 });
 
 // --- Server Startup ---

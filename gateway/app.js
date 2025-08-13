@@ -9,13 +9,11 @@ const rateLimit = require('express-rate-limit');
 const axios = require('axios');
 
 const app = express();
-const PORT = process.env.GATEWAY_PORT || 3000;
+const PORT = process.env.GATEWAY_PORT || 5000;
 
 // --- Middleware ---
 app.use(morgan('dev'));
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 app.get('/favicon.ico', (req, res) => res.status(204).send());
 
 // --- Microservices Configuration (with paths for spawning) ---
@@ -40,8 +38,10 @@ app.use(limiter);
 
 // --- Proxy Setup ---
 const onProxyReq = (proxyReq, req, res) => {
-    // This is the critical fix that re-streams the request body.
-    if (req.body) {
+    if (
+        req.body &&
+        ['POST', 'PUT', 'PATCH'].includes(req.method)
+    ) {
         const bodyData = JSON.stringify(req.body);
         proxyReq.setHeader('Content-Type', 'application/json');
         proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
@@ -56,7 +56,7 @@ Object.keys(services).forEach(route => {
         pathRewrite: {
             [`^${route}`]: '',
         },
-        onProxyReq: onProxyReq, // Apply the body-parser fix
+        onProxyReq: onProxyReq,
         onError: (err, req, res) => {
             console.error(`❌ Proxy Error on ${route}: ${err.message}`);
             res.status(503).json({ error: `Service ${route} is unavailable` });
@@ -65,6 +65,9 @@ Object.keys(services).forEach(route => {
     app.use(route, createProxyMiddleware(proxyOptions));
 });
 
+// --- Body Parsing Middleware (AFTER proxy setup) ---
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // --- Helper Functions ---
 const startMicroservices = () => {

@@ -18,21 +18,26 @@ router.get('/health', (req, res) => {
  */
 router.post('/', async (req, res) => {
     try {
-        // 1. Destructure and validate the required fields from the body
-        const { userId, stationId, startTime } = req.body;
-        if (!userId || !stationId) {
-            return res.status(400).json({ message: 'Missing required fields: userId and stationId' });
+        // Destructure all required fields
+        const { userId, stationId, startTime, endTime, connectorId, carId, energyConsumedKWh, finalCost } = req.body;
+        if (!userId || !stationId || !startTime || !endTime || !connectorId || !carId || !energyConsumedKWh || !finalCost) {
+            return res.status(400).json({ message: 'Missing required fields.' });
         }
-        
+
         console.log('📦 Received valid POST body:', req.body);
 
-        // 2. Create the new session with only the data you expect
+        // Create the new session with all required fields
         const newSession = new ChargingSession({
             userId,
             stationId,
-            startTime // and any other fields you want to allow
+            startTime,
+            endTime,
+            connectorId,
+            carId,
+            energyConsumedKWh,
+            finalCost
         });
-        
+
         await newSession.save();
         res.status(201).json(newSession);
 

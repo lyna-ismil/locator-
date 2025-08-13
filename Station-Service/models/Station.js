@@ -50,7 +50,10 @@ const connectorSchema = new Schema({
 const stationSchema = new Schema({
     stationName: { type: String, required: true },
     network: { type: String, required: true },
-    photoUrl: { type: String, default: '' }, // NEW: URL for a photo of the station
+    photoUrl: { type: String, default: '' },
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    ownerId: { type: String, required: true }, // <-- Add this!
     location: {
         type: pointSchema,
         required: true,

@@ -136,5 +136,53 @@ router.delete('/:id', async (req, res) => {
     }
 });
 
+/*
+ * @route   POST /signup
+ * @desc    Register a new station owner (and their station)
+ * @access  Public
+ */
+router.post('/signup', async (req, res) => {
+    try {
+        const { email, password, ...rest } = req.body;
+        // Check if email already exists
+        const existing = await Station.findOne({ email });
+        if (existing) {
+            return res.status(400).json({ msg: 'Email already registered.' });
+        }
+        // Create station owner (and station)
+        const newStation = new Station({ email, password, ...rest });
+        await newStation.save();
+        // Set ownerId to its own _id for filtering
+        newStation.ownerId = newStation._id;
+        await newStation.save();
+        res.status(201).json(newStation);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).json({ msg: 'Server Error' });
+    }
+});
+
+/*
+ * @route   POST /signin
+ * @desc    Station Owner login
+ * @access  Public
+ */
+router.post('/signin', async (req, res) => {
+    const { email, password } = req.body;
+    try {
+        const owner = await Station.findOne({ email });
+        if (!owner) {
+            return res.status(401).json({ msg: 'Invalid credentials.' });
+        }
+        // For production, use bcrypt to compare hashed passwords!
+        if (owner.password !== password) {
+            return res.status(401).json({ msg: 'Invalid credentials.' });
+        }
+        res.json({ msg: 'Login successful', owner });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).json({ msg: 'Server Error' });
+    }
+});
 
 module.exports = router;
