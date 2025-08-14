@@ -216,7 +216,10 @@ export default function OwnerDashboard() {
               {
                 icon: Activity,
                 title: "Active Connectors",
-                value: stations.reduce((acc, s) => acc + (s.connectors?.length || 0), 0),
+                value: stations.reduce(
+                  (acc, s) => acc + (s.connectors?.filter(c => c.status === "Available").length || 0),
+                  0
+                ),
                 color: "text-blue-600",
                 bg: "bg-blue-100",
               },

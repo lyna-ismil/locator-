@@ -14,7 +14,7 @@ export function ConnectorEditor({ connector, stationId, fetchStations }) {
     chargerLevel: connector.chargerLevel,
     powerKW: connector.powerKW,
     isFast: connector.isFast ?? (connector.chargerLevel?.toLowerCase().includes("fast") || connector.powerKW >= 50),
-    status: connector.status,
+    currentlyAvailable: connector.status === "Available",
   })
   const [isEditing, setIsEditing] = useState(false)
 
@@ -91,9 +91,9 @@ export function ConnectorEditor({ connector, stationId, fetchStations }) {
                   <div className="flex items-center space-x-3 p-3 rounded-lg bg-emerald-50/50 border border-emerald-100">
                     <Checkbox
                       id="available-status"
-                      checked={editData.status === "Available"}
+                      checked={editData.currentlyAvailable}
                       onCheckedChange={(checked) =>
-                        setEditData({ ...editData, status: checked ? "Available" : "In Use" })
+                        setEditData({ ...editData, currentlyAvailable: checked })
                       }
                       className="border-emerald-300 data-[state=checked]:bg-emerald-600 data-[state=checked]:border-emerald-600"
                     />
@@ -136,17 +136,17 @@ export function ConnectorEditor({ connector, stationId, fetchStations }) {
           <div className="ml-4">
             <Badge
               className={`${
-                editData.status === "Available"
+                editData.currentlyAvailable
                   ? "bg-emerald-100 text-emerald-800 border-emerald-200 shadow-sm"
                   : "bg-red-100 text-red-800 border-red-200 shadow-sm"
               } font-semibold px-3 py-1.5 text-xs uppercase tracking-wide`}
             >
               <div
                 className={`w-2 h-2 rounded-full mr-2 ${
-                  editData.status === "Available" ? "bg-emerald-500" : "bg-red-500"
+                  editData.currentlyAvailable ? "bg-emerald-500" : "bg-red-500"
                 }`}
               />
-              {editData.status}
+              {editData.currentlyAvailable ? "Available" : "In Use"}
             </Badge>
           </div>
         </div>
@@ -158,13 +158,18 @@ export function ConnectorEditor({ connector, stationId, fetchStations }) {
                 size="sm"
                 className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm flex items-center gap-2"
                 onClick={async () => {
+                  const payload = {
+                    ...editData,
+                    status: editData.currentlyAvailable ? "Available" : "In Use",
+                  };
+                  delete payload.currentlyAvailable; // Remove helper property before sending
                   await fetch(`http://localhost:5000/stations/${stationId}/connectors/${connector._id}`, {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(editData),
-                  })
-                  setIsEditing(false)
-                  fetchStations()
+                    body: JSON.stringify(payload),
+                  });
+                  setIsEditing(false);
+                  fetchStations();
                 }}
               >
                 <Check className="h-4 w-4" />

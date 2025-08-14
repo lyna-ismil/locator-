@@ -39,6 +39,8 @@ router.post('/register', async (req, res) => {
     try {
         const { fullName, email, password, vehicleDetails } = req.body;
 
+        console.log("Received body:", req.body);
+
         // 1. Basic Validation
         if (!fullName || !email || !password || !vehicleDetails) {
             return res.status(400).json({ msg: 'Please provide all required fields, including vehicle details.' });

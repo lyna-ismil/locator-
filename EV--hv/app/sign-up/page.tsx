@@ -93,16 +93,6 @@ export default function SignUpPage() {
     return () => clearInterval(t);
   }, [testimonials.length])
 
-  const [driverForm, setDriverForm] = useState({
-    firstName: "",
-    lastName: "",
-    email: "",
-    password: "",
-    carMake: "",
-    carModel: "",
-    batteryCapacity: "",
-    connectorType: "",
-  });
   const [ownerForm, setOwnerForm] = useState({
     firstName: "",
     lastName: "",
@@ -120,6 +110,16 @@ export default function SignUpPage() {
     },
     network: "",
   });
+  const [driverForm, setDriverForm] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    password: "",
+    carMake: "",
+    carModel: "",
+    batteryCapacity: "",
+    primaryConnector: "",
+  });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
@@ -136,8 +136,8 @@ export default function SignUpPage() {
           !driverForm.password ||
           !driverForm.carMake ||
           !driverForm.carModel ||
-          !driverForm.batteryCapacity ||
-          !driverForm.connectorType
+          !driverForm.primaryConnector || // <-- use this
+          !driverForm.batteryCapacity
         ) {
           setError("Please fill in all required fields, including vehicle details.");
           return;
@@ -151,8 +151,8 @@ export default function SignUpPage() {
             vehicleDetails: {
               make: driverForm.carMake,
               model: driverForm.carModel,
-              primaryConnector: driverForm.connectorType,
-              batteryCapacity: driverForm.batteryCapacity,
+              primaryConnector: driverForm.primaryConnector,
+              batteryCapacity: Number(driverForm.batteryCapacity),
             },
           }),
         });
@@ -284,192 +284,127 @@ export default function SignUpPage() {
 
                     {/* Driver */}
                     <TabsContent value="driver" className="space-y-6 mt-6">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="firstName">First Name</Label>
-                          <Input
-                            id="firstName"
-                            value={driverForm.firstName}
-                            onChange={e => setDriverForm({ ...driverForm, firstName: e.target.value })}
-                            placeholder="John"
-                            className="bg-white"
-                          />
+                      <form onSubmit={handleSubmit}>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="firstName">First Name <span className="text-red-500">*</span></Label>
+                            <Input
+                              id="firstName"
+                              value={driverForm.firstName}
+                              onChange={e => setDriverForm({ ...driverForm, firstName: e.target.value })}
+                              placeholder="John"
+                              required
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="lastName">Last Name <span className="text-red-500">*</span></Label>
+                            <Input
+                              id="lastName"
+                              value={driverForm.lastName}
+                              onChange={e => setDriverForm({ ...driverForm, lastName: e.target.value })}
+                              placeholder="Doe"
+                              required
+                            />
+                          </div>
                         </div>
                         <div className="space-y-2">
-                          <Label htmlFor="lastName">Last Name</Label>
-                          <Input
-                            id="lastName"
-                            placeholder="Doe"
-                            className="bg-white"
-                            value={driverForm.lastName}
-                            onChange={(e) => setDriverForm({ ...driverForm, lastName: e.target.value })}
-                          />
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="email">Email</Label>
-                        <div className="relative">
-                          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                          <Label htmlFor="email">Email <span className="text-red-500">*</span></Label>
                           <Input
                             id="email"
                             type="email"
-                            placeholder="john@example.com"
-                            className="pl-9 bg-white"
                             value={driverForm.email}
-                            onChange={(e) => setDriverForm({ ...driverForm, email: e.target.value })}
+                            onChange={e => setDriverForm({ ...driverForm, email: e.target.value })}
+                            placeholder="john@example.com"
+                            required
                           />
                         </div>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="password">Password</Label>
-                        <div className="relative">
-                          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                        <div className="space-y-2">
+                          <Label htmlFor="password">Password <span className="text-red-500">*</span></Label>
                           <Input
                             id="password"
-                            type={showPassword ? "text" : "password"}
+                            type="password"
+                            value={driverForm.password}
+                            onChange={e => setDriverForm({ ...driverForm, password: e.target.value })}
                             placeholder="Strong password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="pl-9 pr-10 bg-white"
+                            required
                           />
-                          <button
-                            type="button"
-                            aria-label={showPassword ? "Hide password" : "Show password"}
-                            onClick={() => setShowPassword((s) => !s)}
-                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                          >
-                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                          </button>
                         </div>
-                        {/* Strength meter */}
-                        <div className="mt-2">
-                          <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full ${scoreColor} transition-all duration-300`}
-                              style={{ width: `${score}%` }}
-                            />
+                        <div className="border-t pt-4 mt-4">
+                          <h3 className="font-semibold text-lg mb-4">Vehicle Information</h3>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label htmlFor="carMake">Car Make <span className="text-red-500">*</span></Label>
+                              <Select
+                                value={driverForm.carMake}
+                                onValueChange={v => setDriverForm({ ...driverForm, carMake: v })}
+                                required
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select make" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="Tesla">Tesla</SelectItem>
+                                  <SelectItem value="Nissan">Nissan</SelectItem>
+                                  <SelectItem value="BMW">BMW</SelectItem>
+                                  <SelectItem value="Audi">Audi</SelectItem>
+                                  <SelectItem value="Volkswagen">Volkswagen</SelectItem>
+                                  <SelectItem value="Hyundai">Hyundai</SelectItem>
+                                  <SelectItem value="Kia">Kia</SelectItem>
+                                  <SelectItem value="Other">Other</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="carModel">Car Model <span className="text-red-500">*</span></Label>
+                              <Input
+                                id="carModel"
+                                value={driverForm.carModel}
+                                onChange={e => setDriverForm({ ...driverForm, carModel: e.target.value })}
+                                placeholder="Model 3, Leaf, i3..."
+                                required
+                              />
+                            </div>
                           </div>
-                          <div className="mt-1 text-xs text-gray-500">
-                            {score < 40 ? "Weak" : score < 70 ? "Okay" : "Strong"} password
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="border-t pt-4">
-                        <h3 className="font-semibold text-lg mb-4">Vehicle Information</h3>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label htmlFor="carMake">Car Make</Label>
-                            <Select
-                              value={driverForm.carMake}
-                              onValueChange={(v) => setDriverForm({ ...driverForm, carMake: v })}
-                            >
-                              <SelectTrigger>
-                                <SelectValue placeholder="Select make" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="tesla">Tesla</SelectItem>
-                                <SelectItem value="nissan">Nissan</SelectItem>
-                                <SelectItem value="bmw">BMW</SelectItem>
-                                <SelectItem value="audi">Audi</SelectItem>
-                                <SelectItem value="volkswagen">Volkswagen</SelectItem>
-                                <SelectItem value="hyundai">Hyundai</SelectItem>
-                                <SelectItem value="kia">Kia</SelectItem>
-                                <SelectItem value="other">Other</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="space-y-2">
-                            <Label htmlFor="carModel">Car Model</Label>
-                            <Input
-                              id="carModel"
-                              placeholder="Model 3, Leaf, i3..."
-                              className="bg-white"
-                              value={driverForm.carModel}
-                              onChange={(e) => setDriverForm({ ...driverForm, carModel: e.target.value })}
-                            />
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4 mt-4">
-                          <div className="space-y-2">
-                            <Label htmlFor="batteryCapacity">Battery Capacity (kWh)</Label>
-                            <Input
-                              id="batteryCapacity"
-                              type="number"
-                              placeholder="75"
-                              className="bg-white"
-                              value={driverForm.batteryCapacity}
-                              onChange={(e) => setDriverForm({ ...driverForm, batteryCapacity: e.target.value })}
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label htmlFor="connectorType">Preferred Connector</Label>
-                            <Select
-                              value={driverForm.connectorType}
-                              onValueChange={(v) => setDriverForm({ ...driverForm, connectorType: v })}
-                            >
-                              <SelectTrigger>
-                                <SelectValue placeholder="Select connector" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="type2">Type 2</SelectItem>
-                                <SelectItem value="ccs">CCS</SelectItem>
-                                <SelectItem value="chademo">CHAdeMO</SelectItem>
-                                <SelectItem value="tesla">Tesla Supercharger</SelectItem>
-                              </SelectContent>
-                            </Select>
+                          <div className="grid grid-cols-2 gap-4 mt-4">
+                            <div className="space-y-2">
+                              <Label htmlFor="batteryCapacity">Battery Capacity (kWh) <span className="text-red-500">*</span></Label>
+                              <Input
+                                id="batteryCapacity"
+                                type="number"
+                                value={driverForm.batteryCapacity}
+                                onChange={e => setDriverForm({ ...driverForm, batteryCapacity: e.target.value })}
+                                placeholder="75"
+                                required
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="primaryConnector">Preferred Connector <span className="text-red-500">*</span></Label>
+                              <Select
+                                value={driverForm.primaryConnector}
+                                onValueChange={v => setDriverForm({ ...driverForm, primaryConnector: v })}
+                                required
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select connector" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="Type 2">Type 2</SelectItem>
+                                  <SelectItem value="CCS">CCS</SelectItem>
+                                  <SelectItem value="CHAdeMO">CHAdeMO</SelectItem>
+                                  <SelectItem value="Tesla Supercharger">Tesla Supercharger</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
                           </div>
                         </div>
-                      </div>
-
-                      <label className="flex items-center gap-2 text-sm text-gray-600">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
-                        />
-                        I agree to the{" "}
-                        <Link href="#" className="text-emerald-700 hover:underline">
-                          Terms
-                        </Link>{" "}
-                        and{" "}
-                        <Link href="#" className="text-emerald-700 hover:underline">
-                          Privacy Policy
-                        </Link>
-                        .
-                      </label>
-
-                      <Button
-                        className="w-full bg-emerald-600 hover:bg-emerald-700 h-11"
-                        type="submit"
-                        onClick={handleSubmit}
-                      >
-                        Create Account
-                      </Button>
-                      {error && <div className="text-red-600 text-sm mt-2">{error}</div>}
-                      {success && <div className="text-green-600 text-sm mt-2">{success}</div>}
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <Button variant="outline" className="h-11 bg-transparent">
-                          <FaGoogle size={16} color="#EA4335" style={{ marginRight: "0.5rem" }} />
-                          Google
-                        </Button>
-                        <Button variant="outline" className="h-11 bg-transparent">
-                          <FaFacebook size={16} color="#1877F3" style={{ marginRight: "0.5rem" }} />
-                          Facebook
-                        </Button>
-                      </div>
-
-                      <p className="text-xs text-gray-500 flex items-center gap-1">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                        You can update details later in your profile.
-                      </p>
-
-                      <div className="text-center text-sm text-gray-600 pt-2">
-                        Already have an account?{" "}
-                        <Link href="/sign-in" className="text-emerald-700 hover:underline">
-                          Sign in
-                        </Link>
-                      </div>
+                        <div className="mt-6">
+                          <Button className="w-full bg-emerald-600 hover:bg-emerald-700 h-11" type="submit">
+                            Create Account
+                          </Button>
+                          {error && <div className="text-red-600 text-sm mt-2">{error}</div>}
+                          {success && <div className="text-green-600 text-sm mt-2">{success}</div>}
+                        </div>
+                      </form>
                     </TabsContent>
 
                     {/* Owner */}
