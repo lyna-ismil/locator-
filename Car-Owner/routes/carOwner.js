@@ -148,5 +148,45 @@ router.put('/profile/:id', async (req, res) => {
     }
 });
 
+/*
+ * @route   POST /signin
+ * @desc    Sign in as a Car Owner (EV Driver)
+ * @access  Public
+ */
+router.post('/signin', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ msg: 'Please provide email and password.' });
+        }
+
+        // Find user by email
+        const user = await CarOwner.findOne({ email: email.toLowerCase() });
+        if (!user) {
+            return res.status(400).json({ msg: 'Invalid email or password.' });
+        }
+
+        // Compare password
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return res.status(400).json({ msg: 'Invalid email or password.' });
+        }
+
+        // Success: return user info (excluding password)
+        res.json({
+            msg: 'Signed in successfully.',
+            user: {
+                id: user.id,
+                fullName: user.fullName,
+                email: user.email,
+                vehicle: user.vehicleDetails,
+                createdAt: user.createdAt
+            }
+        });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
 
 module.exports = router;

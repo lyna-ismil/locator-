@@ -7,8 +7,21 @@ const vehicleDetailsSchema = new Schema({
     model: { type: String, required: true },
     year: { type: Number },
     primaryConnector: { type: String, required: true },
-    maxChargingSpeed: { type: Number }
+    maxChargingSpeed: { type: Number },
+    // --- NEW FIELD ---
+    // Stores any adapters the user has, allowing for more station options.
+    adapters: { type: [String] } // e.g., ["CCS", "J-1772"]
 }, { _id: false });
+
+// Defines the schema for the user's personal preferences
+const preferencesSchema = new Schema({
+    // --- NEW FIELDS ---
+    // Stores the user's favorite charging networks.
+    preferredNetworks: [String], // e.g., ["Electrify America", "ChargePoint"]
+    // Stores amenities the user wants to filter for by default.
+    requiredAmenities: [String]  // e.g., ["restrooms", "food"]
+}, { _id: false });
+
 
 // Defines the main schema for the Car Owner
 const carOwnerSchema = new Schema({
@@ -34,20 +47,19 @@ const carOwnerSchema = new Schema({
         type: Schema.Types.ObjectId, 
         ref: 'Station' 
     }],
-    // This field is now included
     chargingHistory: { 
         type: [Object] 
     },
     paymentMethods: { 
         type: [Object] 
+    },
+    // --- NEW FIELD ---
+    // Embeds the preferences schema into the main user document.
+    preferences: { 
+        type: preferencesSchema 
     }
 }, {
-    // This option automatically adds `createdAt` and `updatedAt` fields
     timestamps: true
 });
-
-// A note on fields automatically handled by Mongoose:
-// - `_id` is automatically generated for every document.
-// - `createdAt` is automatically added because of the `timestamps: true` option.
 
 module.exports = mongoose.model('CarOwner', carOwnerSchema);

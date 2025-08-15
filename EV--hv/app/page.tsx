@@ -27,8 +27,11 @@ import ChatbotWidget from "@/components/chatbot/chatbot-widget"
 import MapTunisia from "@/components/map/tunisia-map"
 import { FaFacebook, FaTwitter, FaLinkedin, FaInstagram } from "react-icons/fa"
 import { apiFetch } from "@/lib/api"
+import { useRouter } from "next/navigation"
 
 export default function HomePage() {
+  const router = useRouter()
+
   // Testimonials carousel (dynamic from backend)
   const [testimonials, setTestimonials] = useState<
     { quote: string; name: string; role: string; avatar: string }[]
@@ -98,6 +101,70 @@ export default function HomePage() {
       className="h-10 w-auto opacity-70"
     />
   ))
+
+  const [ownerForm, setOwnerForm] = useState({
+    stationName: "",
+    network: "",
+    email: "",
+    password: "",
+    ownerId: "", // will set to email for now
+    location: {
+      type: "Point",
+      coordinates: ["", ""], // [longitude, latitude]
+    },
+    address: {
+      street: "",
+      city: "",
+      state: "",
+      zipCode: "",
+    },
+  });
+
+  async function handleOwnerSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    // Validate required fields
+    if (
+      !ownerForm.stationName ||
+      !ownerForm.network ||
+      !ownerForm.email ||
+      !ownerForm.password ||
+      !ownerForm.location.coordinates[0] ||
+      !ownerForm.location.coordinates[1] ||
+      !ownerForm.address.street ||
+      !ownerForm.address.city ||
+      !ownerForm.address.state ||
+      !ownerForm.address.zipCode
+    ) {
+      setError("Please fill in all required fields.");
+      return;
+    }
+
+    const payload = {
+      ...ownerForm,
+      ownerId: ownerForm.email, // or a real ownerId if available
+      location: {
+        ...ownerForm.location,
+        coordinates: [
+          Number(ownerForm.location.coordinates[0]),
+          Number(ownerForm.location.coordinates[1])
+        ]
+      }
+    };
+
+    try {
+      await apiFetch("/stations/signup", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      setSuccess("Station owner account created!");
+      router.push("/sign-in");
+    } catch (err) {
+      setError("Failed to create account. Please check your input and try again.");
+    }
+  }
 
   return (
     <div className="min-h-screen bg-white text-gray-900">
