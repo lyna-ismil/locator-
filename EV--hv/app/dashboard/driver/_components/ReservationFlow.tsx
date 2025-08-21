@@ -1,14 +1,26 @@
 "use client"
 import React, { useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { CreditCard, Wallet, Clock, Zap, MapPin, Check, ArrowLeft, Star, Shield, Calculator, Timer } from "lucide-react"
+import { CreditCard, Wallet, Clock, Zap, MapPin, Check, ArrowLeft, Star, Shield, Calculator, Timer, User as UserIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Progress } from "@/components/ui/progress"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import ReservationCountdown from "./ReservationCountdown"
 import type { Station, Reservation, CarOwner } from "../types"
+
+// HELPER: parse price strings like "0.30 / kWh" or "$0.45/kWh"
+function parsePricePerKwh(priceString?: string): number {
+  if (!priceString) return 0.3
+  const match = priceString.match(/(\d+\.?\d*)\s*\/?\s*kWh/i)
+  if (match) return parseFloat(match[1])
+  // try to extract number anywhere
+  const anyNum = priceString.match(/(\d+\.?\d*)/)
+  return anyNum ? parseFloat(anyNum[1]) : 0.3
+}
 
 const api = {
   createReservation: async (
@@ -72,54 +84,102 @@ export default function ReservationFlow({
   })
   const [batteryLevel, setBatteryLevel] = useState(25)
   const [targetLevel, setTargetLevel] = useState(80)
-
-  React.useEffect(() => {
-    if (step === "details") {
-      setLoadingEstimates(true)
-      api.getEstimates(station.id, chargerId).then((data) => {
-        setEstimates(data)
-        setLoadingEstimates(false)
-      })
-    }
-  }, [step, station.id, chargerId])
-
+  const [cardDetails, setCardDetails] = useState({
+    number: "",
+    expiry: "",
+    cvc: "",
+    name: "",
+  })
   const connector = station.connectors.find((c) => c.id === chargerId)
 
+  // Calculate estimates client-side based on vehicle & connector data
+  React.useEffect(() => {
+    if (step !== "details") return
+    // require vehicle battery capacity and connector power to calculate
+    const batteryCapacity = user?.vehicle?.batteryCapacityKWh
+    const connectorPower = connector?.power
+    if (!batteryCapacity || !connectorPower) return
+
+    setLoadingEstimates(true)
+
+    const energyNeeded = ((targetLevel - batteryLevel) / 100) * batteryCapacity // kWh
+    const duration = connectorPower > 0 ? (energyNeeded / connectorPower) * 60 : 0 // minutes
+    const pricePerKwh = parsePricePerKwh(station.pricing)
+    const cost = energyNeeded * pricePerKwh
+
+    // small delay to smooth UX
+    const t = setTimeout(() => {
+      setEstimates({
+        cost: parseFloat(cost.toFixed(2)),
+        duration: Math.max(1, Math.round(duration)),
+        energyNeeded: parseFloat(energyNeeded.toFixed(1)),
+        peakPower: connectorPower,
+      })
+      setLoadingEstimates(false)
+    }, 500)
+
+    return () => clearTimeout(t)
+  }, [
+    step,
+    station.id,
+    chargerId,
+    batteryLevel,
+    targetLevel,
+    user?.vehicle?.batteryCapacityKWh,
+    connector?.power,
+    station.pricing,
+  ])
+
   async function handleConfirm() {
-    if (!user || !station) return
+    // Basic validations
+    if (!user) {
+      setError("User is missing. Please sign in.")
+      return
+    }
+    if (!user.vehicle) {
+      setError("Vehicle details are missing. Please update your profile.")
+      return
+    }
+
+    // Try a few common places for the vehicle id
+    const carId = user.vehicle.id || user.vehicle._id || (user.vehicle as any).vehicleId
+    if (!carId) {
+      setError("Missing vehicle ID. Please re-save your vehicle in your profile.")
+      return
+    }
+
+    // Ensure station id is available
+    const stationId = (station as any).id || (station as any)._id
+    if (!stationId) {
+      setError("Station identifier is missing.")
+      return
+    }
+
     setLoading(true)
     setError(null)
-    try {
-      // Ensure carId retrieval works with new id
-      const carId = user.vehicle?.id || user.vehicleId
-      if (!carId) {
-        setError("Missing vehicle ID. Update your vehicle profile first.")
-        setLoading(false)
-        return
-      }
-      if (!chargerId) {
-        setError("Select a connector before reserving.")
-        setLoading(false)
-        return
-      }
-      const start = startTime || new Date().toISOString()
-      const end = endTime || new Date(Date.now() + 30 * 60 * 1000).toISOString()
 
-      // Correct argument order: (userId, carId, stationId, connectorId, start, end, paymentMethod)
-      const res = await api.createReservation(
+    try {
+      // Reserve for the next 30 minutes by default
+      const startTime = new Date().toISOString()
+      const endTime = new Date(Date.now() + 30 * 60 * 1000).toISOString()
+
+      // Call API helper - adjust call signature if your api helper differs
+      const reservation = await api.createReservation(
         user.id,
         carId,
-        station.id,
+        stationId,
         chargerId,
-        start,
-        end,
+        startTime,
+        endTime,
         paymentMethod
       )
 
-      setReservation(res)
-      onCompleted?.(res)
-    } catch (e:any) {
-      setError(e.message || "Reservation failed")
+      setReservation(reservation)
+      setStep("success")
+      // Optionally call onComplete/onComplete callback here:
+      // if (onComplete) onComplete(reservation)
+    } catch (err: any) {
+      setError(err?.message || "An unknown error occurred during reservation.")
     } finally {
       setLoading(false)
     }
@@ -373,17 +433,78 @@ export default function ReservationFlow({
                   </div>
 
                   {paymentMethod === "Visa" && (
-                    <Card className="bg-blue-50 border-blue-200">
-                      <CardContent className="p-4">
-                        <div className="flex items-center space-x-3">
-                          <CreditCard className="w-5 h-5 text-blue-600" />
-                          <div>
-                            <h5 className="font-medium text-blue-900">Saved Payment Method</h5>
-                            <p className="text-sm text-blue-700">Visa ending in 4242 • Expires 12/25</p>
+                    <>
+                      <Card className="bg-blue-50 border-blue-200">
+                        <CardContent className="p-4">
+                          <div className="flex items-center space-x-3">
+                            <CreditCard className="w-5 h-5 text-blue-600" />
+                            <div>
+                              <h5 className="font-medium text-blue-900">Saved Payment Method</h5>
+                              <p className="text-sm text-blue-700">Visa ending in 4242 • Expires 12/25</p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      <motion.div
+                        key="card-details"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="space-y-4 pt-4"
+                      >
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="cardNumber">Card Number</Label>
+                            <div className="relative">
+                              <CreditCard className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                              <Input
+                                id="cardNumber"
+                                placeholder="•••• •••• •••• ••••"
+                                value={cardDetails.number}
+                                onChange={(e) => setCardDetails({ ...cardDetails, number: e.target.value })}
+                                className="pl-10"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="expiry">Expiry Date</Label>
+                            <Input
+                              id="expiry"
+                              placeholder="MM/YY"
+                              value={cardDetails.expiry}
+                              onChange={(e) => setCardDetails({ ...cardDetails, expiry: e.target.value })}
+                            />
                           </div>
                         </div>
-                      </CardContent>
-                    </Card>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="cvc">CVC</Label>
+                            <div className="relative">
+                              <CreditCard className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                              <Input
+                                id="cvc"
+                                placeholder="•••"
+                                value={cardDetails.cvc}
+                                onChange={(e) => setCardDetails({ ...cardDetails, cvc: e.target.value })}
+                                className="pl-10"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="name">Cardholder Name</Label>
+                            <Input
+                              id="name"
+                              placeholder="John Doe"
+                              value={cardDetails.name}
+                              onChange={(e) => setCardDetails({ ...cardDetails, name: e.target.value })}
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+                    </>
                   )}
 
                   <Button

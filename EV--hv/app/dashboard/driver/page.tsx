@@ -1,9 +1,11 @@
 "use client"
 
+import type React from "react"
+
 import { useEffect, useState, useCallback } from "react"
 import dynamic from "next/dynamic"
 import { motion, AnimatePresence, type PanInfo } from "framer-motion"
-import { Car, Zap, User, Settings, Heart, Menu, X, Home, Search, Calendar, Bell, ChevronDown, Loader2 } from "lucide-react"
+import { Car, Zap, User, Settings, Heart, Menu, X, Home, Search, Calendar, Bell, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -12,7 +14,7 @@ import DriverDashboard from "./_components/DriverDashboard"
 import StationDetails from "./_components/StationDetails"
 import ReservationFlow from "./_components/ReservationFlow"
 
-import type { CarOwner, Station, Reservation } from "./types" // ensure types file exports these
+import type { CarOwner, Station } from "./types" // ensure types file exports these
 
 const StationDiscovery = dynamic(() => import("./_components/StationDiscovery"), { ssr: false })
 
@@ -32,7 +34,7 @@ const api = {
   getStations: async (location: { lat: number; lng: number }, connectors: string[]) => {
     const qs = connectors.filter(Boolean).join(",")
     const res = await fetch(
-      `http://localhost:5000/stations/nearby?lat=${location.lat}&lng=${location.lng}&connectors=${encodeURIComponent(qs)}`
+      `http://localhost:5000/stations/nearby?lat=${location.lat}&lng=${location.lng}&connectors=${encodeURIComponent(qs)}`,
     )
     if (!res.ok) throw new Error("Failed to fetch stations")
     return res.json()
@@ -64,12 +66,13 @@ function normalizeUser(raw: any): CarOwner | null {
     _id: base._id || id, // keep both if types allow
     fullName: base.fullName || "",
     email: base.email || "",
-    vehicleDetails: base.vehicleDetails || base.vehicle || {
-      make: "",
-      model: "",
-      primaryConnector: "",
-      adapters: [],
-    },
+    vehicleDetails: base.vehicleDetails ||
+      base.vehicle || {
+        make: "",
+        model: "",
+        primaryConnector: "",
+        adapters: [],
+      },
     preferences: base.preferences || { preferredNetworks: [], requiredAmenities: [] },
   } as CarOwner
 }
@@ -111,12 +114,12 @@ export default function DriverPage() {
       try {
         const cached = localStorage.getItem("driverUser")
         if (cached) {
-            const parsed = normalizeUser(JSON.parse(cached))
-            if (parsed) {
-              setUser(parsed)
-              setLoadingUser(false)
-              return
-            }
+          const parsed = normalizeUser(JSON.parse(cached))
+          if (parsed) {
+            setUser(parsed)
+            setLoadingUser(false)
+            return
+          }
         }
         const id = localStorage.getItem("driverUserId")
         if (!id) {
@@ -173,7 +176,7 @@ export default function DriverPage() {
         setLocation({ lat: 36.8065, lng: 10.1815 })
         setLoadingLocation(false)
       },
-      { enableHighAccuracy: true, timeout: 8000 }
+      { enableHighAccuracy: true, timeout: 8000 },
     )
   }, [user])
 
@@ -181,23 +184,24 @@ export default function DriverPage() {
   useEffect(() => {
     const uid = user?.id
     if (!uid) return
-    api.getFavorites(uid)
+    api
+      .getFavorites(uid)
       .then((f) => setFavorites(Array.isArray(f) ? f : []))
       .catch(() => setFavorites([])) // swallow if route not ready
-  }, [user?.id])
+  }, [user])
 
   /* ---------- STATIONS ---------- */
   useEffect(() => {
     if (!location || !user) return
-    const connectors = [
-      user.vehicleDetails?.primaryConnector,
-      ...(user.vehicleDetails?.adapters || []),
-    ].filter(Boolean) as string[]
+    const connectors = [user.vehicleDetails?.primaryConnector, ...(user.vehicleDetails?.adapters || [])].filter(
+      Boolean,
+    ) as string[]
     if (connectors.length === 0) return
-    api.getStations(location, connectors)
+    api
+      .getStations(location, connectors)
       .then(setStations)
       .catch(() => setStations([]))
-  }, [location, user?.vehicleDetails?.primaryConnector, user?.vehicleDetails?.adapters])
+  }, [location, user])
 
   /* ---------- MOBILE DETECTION ---------- */
   useEffect(() => {
@@ -222,12 +226,14 @@ export default function DriverPage() {
     await new Promise((r) => setTimeout(r, 1000))
     setIsRefreshing(false)
     if (location && user) {
-      const connectors = [
-        user.vehicleDetails?.primaryConnector,
-        ...(user.vehicleDetails?.adapters || []),
-      ].filter(Boolean) as string[]
+      const connectors = [user.vehicleDetails?.primaryConnector, ...(user.vehicleDetails?.adapters || [])].filter(
+        Boolean,
+      ) as string[]
       if (connectors.length) {
-        api.getStations(location, connectors).then(setStations).catch(() => {})
+        api
+          .getStations(location, connectors)
+          .then(setStations)
+          .catch(() => {})
       }
     }
   }, [isRefreshing, location, user])
@@ -336,21 +342,26 @@ export default function DriverPage() {
       drag={isMobile ? "x" : false}
       dragConstraints={{ left: -50, right: 0 }}
       onDragEnd={handleSwipe}
-      className={`${isMobile ? "fixed inset-y-0 left-0 z-50 w-72" : "w-64"} bg-white border-r border-gray-200 shadow-lg`}
+      className={`${isMobile ? "fixed inset-y-0 left-0 z-50 w-72" : "w-64"} bg-gradient-to-b from-white to-gray-50 border-r border-gray-200 shadow-xl`}
     >
-      <div className="p-6 border-b border-gray-100">
+      <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-emerald-500 to-lime-500">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-lime-500 rounded-xl flex items-center justify-center">
-              <Zap className="w-6 h-6 text-white" />
+            <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center border border-white/30">
+              <Zap className="w-7 h-7 text-white" />
             </div>
             <div>
-              <h2 className="font-semibold text-gray-900">ChargeConnect</h2>
-              <p className="text-sm text-gray-500">Driver Portal</p>
+              <h2 className="font-bold text-white text-lg">ChargeConnect</h2>
+              <p className="text-white/80 text-sm font-medium">Driver Portal</p>
             </div>
           </div>
           {isMobile && (
-            <Button variant="ghost" size="sm" onClick={() => setIsMobileMenuOpen(false)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="text-white hover:bg-white/20"
+            >
               <X className="w-5 h-5" />
             </Button>
           )}
@@ -358,19 +369,22 @@ export default function DriverPage() {
       </div>
 
       <div className="p-4">
-        <Card className="bg-gradient-to-br from-emerald-50 to-lime-50 border-emerald-200">
+        <Card className="bg-gradient-to-br from-emerald-50 via-lime-50 to-green-50 border-emerald-200 shadow-sm hover:shadow-md transition-shadow duration-200">
           <CardContent className="p-4">
             <div className="flex items-center space-x-3">
-              <div className="w-12 h-12 bg-emerald-500 rounded-full flex items-center justify-center">
-                <span className="text-white font-semibold text-lg">{user.fullName.charAt(0)}</span>
+              <div className="relative">
+                <div className="w-14 h-14 bg-gradient-to-br from-emerald-500 to-lime-500 rounded-full flex items-center justify-center shadow-lg">
+                  <span className="text-white font-bold text-xl">{user.fullName.charAt(0)}</span>
+                </div>
+                <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-green-500 rounded-full border-2 border-white"></div>
               </div>
               <div className="flex-1 min-w-0">
-                <p className="font-medium text-gray-900 truncate">{user.fullName}</p>
-                <p className="text-sm text-gray-500 truncate">{user.email}</p>
+                <p className="font-semibold text-gray-900 truncate text-sm">{user.fullName}</p>
+                <p className="text-xs text-gray-600 truncate">{user.email}</p>
                 {user.vehicleDetails?.make && (
-                  <div className="flex items-center mt-1">
-                    <Car className="w-3 h-3 text-emerald-500 mr-1" />
-                    <span className="text-xs text-emerald-600">
+                  <div className="flex items-center mt-1.5">
+                    <Car className="w-3 h-3 text-emerald-600 mr-1" />
+                    <span className="text-xs text-emerald-700 font-medium">
                       {user.vehicleDetails.make} {user.vehicleDetails.model}
                     </span>
                   </div>
@@ -381,54 +395,100 @@ export default function DriverPage() {
         </Card>
       </div>
 
-      <nav className="px-4 pb-4 space-y-1">
+      <nav className="px-4 pb-4 space-y-2">
         {navigationItems.map((item) => {
           const Icon = item.icon
           const isActive = currentView === item.id
-            return (
-              <Button
-                key={item.id}
-                variant={isActive ? "default" : "ghost"}
-                className={`w-full justify-start h-12 ${isActive ? "bg-emerald-500 hover:bg-emerald-600 text-white" : "hover:bg-gray-100 text-gray-700"}`}
-                onClick={() => {
-                  setCurrentView(item.id as DashboardView)
-                  if (isMobile) setIsMobileMenuOpen(false)
-                  if (isMobile && "vibrate" in navigator) navigator.vibrate(10)
-                }}
-                title={item.shortcut}
-              >
-                <Icon className="w-5 h-5 mr-3" />
-                <span className="flex-1 text-left">{item.label}</span>
-                {!!item.badge && (
-                  <Badge variant="secondary" className="ml-auto">
-                    {item.badge}
-                  </Badge>
-                )}
-              </Button>
-            )
+          return (
+            <Button
+              key={item.id}
+              variant={isActive ? "default" : "ghost"}
+              className={`w-full justify-start h-12 transition-all duration-200 ${
+                isActive
+                  ? "bg-gradient-to-r from-emerald-500 to-lime-500 hover:from-emerald-600 hover:to-lime-600 text-white shadow-md"
+                  : "hover:bg-gray-100 text-gray-700 hover:text-gray-900 hover:shadow-sm"
+              }`}
+              onClick={() => {
+                setCurrentView(item.id as DashboardView)
+                if (isMobile) setIsMobileMenuOpen(false)
+                if (isMobile && "vibrate" in navigator) navigator.vibrate(10)
+              }}
+              title={item.shortcut}
+            >
+              <Icon className={`w-5 h-5 mr-3 ${isActive ? "text-white" : "text-gray-500"}`} />
+              <span className="flex-1 text-left font-medium">{item.label}</span>
+              {!!item.badge && (
+                <Badge
+                  variant={isActive ? "secondary" : "outline"}
+                  className={`ml-auto text-xs ${
+                    isActive
+                      ? "bg-white/20 text-white border-white/30"
+                      : "bg-emerald-100 text-emerald-700 border-emerald-200"
+                  }`}
+                >
+                  {item.badge}
+                </Badge>
+              )}
+            </Button>
+          )
         })}
       </nav>
+
+      <div className="mt-auto p-4 border-t border-gray-200">
+        <div className="grid grid-cols-2 gap-3 text-center mb-4">
+          <div className="bg-emerald-50 rounded-lg p-2">
+            <div className="text-lg font-bold text-emerald-600">{favorites.length}</div>
+            <div className="text-xs text-emerald-700">Favorites</div>
+          </div>
+          <div className="bg-blue-50 rounded-lg p-2">
+            <div className="text-lg font-bold text-blue-600">{stations.length}</div>
+            <div className="text-xs text-blue-700">Nearby</div>
+          </div>
+        </div>
+        <Button
+          onClick={() => {
+            localStorage.removeItem("driverUser")
+            localStorage.removeItem("driverUserId")
+            setUser(null)
+            window.location.href = "/sign-in"
+          }}
+          variant="outline"
+          className="w-full text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300 transition-colors duration-200"
+        >
+          Log Out
+        </Button>
+      </div>
     </motion.div>
   )
 
   const MobileHeader = () => (
-    <div className="md:hidden bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
-      {isRefreshing && <div className="absolute top-0 left-0 right-0 h-1 bg-emerald-500 animate-pulse" />}
-      <Button variant="ghost" size="sm" onClick={() => setIsMobileMenuOpen(true)}>
+    <div className="md:hidden bg-gradient-to-r from-emerald-500 to-lime-500 px-4 py-3 flex items-center justify-between shadow-lg">
+      {isRefreshing && <div className="absolute top-0 left-0 right-0 h-1 bg-white/50 animate-pulse" />}
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => setIsMobileMenuOpen(true)}
+        className="text-white hover:bg-white/20"
+      >
         <Menu className="w-6 h-6" />
       </Button>
       <div className="flex items-center space-x-2">
-        <Zap className="w-6 h-6 text-emerald-500" />
-        <span className="font-semibold text-gray-900">ChargeConnect</span>
+        <Zap className="w-6 h-6 text-white" />
+        <span className="font-bold text-white">ChargeConnect</span>
       </div>
-      <Button variant="ghost" size="sm" className="relative">
+      <Button variant="ghost" size="sm" className="relative text-white hover:bg-white/20">
         <Bell className="w-5 h-5" />
+        {notifications > 0 && (
+          <Badge className="absolute -top-1 -right-1 w-4 h-4 p-0 text-xs bg-red-500 text-white">
+            {notifications > 9 ? "9+" : notifications}
+          </Badge>
+        )}
       </Button>
     </div>
   )
 
   const BottomNavigation = () => (
-    <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-40">
+    <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-sm border-t border-gray-200 z-40 shadow-lg">
       <div className="grid grid-cols-4 gap-1 p-2">
         {["overview", "discover", "reservations", "favorites"].map((id) => {
           const item = navigationItems.find((n) => n.id === id)!
@@ -438,16 +498,20 @@ export default function DriverPage() {
             <Button
               key={item.id}
               variant="ghost"
-              className={`flex flex-col items-center h-16 ${isActive ? "text-emerald-600" : "text-gray-600"}`}
+              className={`flex flex-col items-center h-16 transition-all duration-200 ${
+                isActive ? "text-emerald-600 bg-emerald-50" : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+              }`}
               onClick={() => {
                 setCurrentView(item.id as DashboardView)
                 if ("vibrate" in navigator) navigator.vibrate(10)
               }}
             >
-              <Icon className="w-5 h-5 mb-1" />
-              <span className="text-xs">{item.label}</span>
+              <Icon className={`w-5 h-5 mb-1 ${isActive ? "text-emerald-600" : "text-gray-500"}`} />
+              <span className={`text-xs font-medium ${isActive ? "text-emerald-600" : "text-gray-600"}`}>
+                {item.label}
+              </span>
               {!!item.badge && (
-                <Badge className="absolute top-1 right-2 w-4 h-4 p-0 text-xs bg-red-500">
+                <Badge className="absolute top-1 right-2 w-4 h-4 p-0 text-xs bg-red-500 text-white">
                   {Number(item.badge) > 9 ? "9+" : item.badge}
                 </Badge>
               )}
@@ -508,7 +572,9 @@ export default function DriverPage() {
       <AnimatePresence>
         {isMobile && isMobileMenuOpen && (
           <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             className="fixed inset-0 bg-black/50 z-40"
             onClick={() => setIsMobileMenuOpen(false)}
           />
@@ -522,7 +588,8 @@ export default function DriverPage() {
         <main className={`flex-1 overflow-auto ${isMobile ? "pb-20" : ""}`}>
           <motion.div
             key={currentView}
-            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.25 }}
             className="h-full"
             drag={isMobile ? "x" : false}
@@ -538,7 +605,12 @@ export default function DriverPage() {
 
       <AnimatePresence>
         {selectedStation && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50"
+          >
             <StationDetails
               station={selectedStation}
               user={user}
@@ -554,7 +626,12 @@ export default function DriverPage() {
 
       <AnimatePresence>
         {reservationFlow && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50"
+          >
             <ReservationFlow
               station={reservationFlow.station}
               chargerId={reservationFlow.chargerId}
@@ -564,18 +641,6 @@ export default function DriverPage() {
           </motion.div>
         )}
       </AnimatePresence>
-
-      <Button
-        onClick={() => {
-          localStorage.removeItem("driverUser")
-          localStorage.removeItem("driverUserId")
-          setUser(null)
-          window.location.href = "/sign-in"
-        }}
-        className="fixed bottom-4 right-4 bg-red-500 hover:bg-red-600 text-white"
-      >
-        Log Out
-      </Button>
     </div>
   )
 }

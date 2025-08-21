@@ -1,5 +1,6 @@
 "use client"
-import React, { useState } from "react"
+import type React from "react"
+import { useState } from "react"
 import { useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -8,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -28,39 +29,68 @@ import {
   Zap,
   TrendingUp,
 } from "lucide-react"
-import { CONNECTOR_TYPES, ConnectorType, VehicleDetails, CarOwner } from "../types"
+import { CONNECTOR_TYPES, type ConnectorType, type VehicleDetails, type Reservation, type Reclamation } from "../types"
+
+// FALLBACK: ensure we always have a connector list at runtime
+const DEFAULT_CONNECTORS = ["TYPE1", "TYPE2", "CHAdeMO", "CCS", "TESLA", "GB/T"]
+const CONNECTORS: string[] = Array.isArray(CONNECTOR_TYPES) ? (CONNECTOR_TYPES as string[]) : DEFAULT_CONNECTORS
+
+const BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5000").replace(/\/$/, "")
 
 const api = {
-  getHistory: async (email: string): Promise<Reservation[]> => {
-    return [
-      {
-        id: "r1",
-        stationId: "ChargePoint Central",
-        chargerId: "CCS-150kW",
-        expiresAt: "2024-08-15T12:00:00Z",
-        paymentMethod: "Visa",
-        status: "completed",
-        cost: 15.75,
-        duration: 35,
-        energyDelivered: 28.5,
-        date: "2024-08-15",
-      },
-      {
-        id: "r2",
-        stationId: "Tesla Supercharger",
-        chargerId: "Tesla-250kW",
-        expiresAt: "2024-08-10T14:30:00Z",
-        paymentMethod: "OnSite",
-        status: "completed",
-        cost: 22.4,
-        duration: 42,
-        energyDelivered: 35.2,
-        date: "2024-08-10",
-      },
+  getHistory: async (email: string, timeoutMs = 7000): Promise<Reservation[]> => {
+    const endpoints = [
+      `${BASE}/sessions?email=${encodeURIComponent(email)}`,
+      `${BASE}/charging-sessions?email=${encodeURIComponent(email)}`,
+      `${BASE}/sessions?userEmail=${encodeURIComponent(email)}`,
     ]
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+      let data: any = null
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url, { signal: controller.signal })
+          if (!res.ok) continue
+          data = await res.json()
+          break
+        } catch (e) {
+          if ((e as any).name === "AbortError") throw e
+          // try next endpoint
+        }
+      }
+
+      clearTimeout(timeout)
+      if (!data) throw new Error("No session data returned from any endpoint")
+
+      const sessions: any[] = Array.isArray(data) ? data : data.sessions || data.items || []
+      return sessions.map((s: any) => ({
+        id: s._id || s.id || s.sessionId || `${s.stationId}-${s.chargerId}-${s.date || s.createdAt}`,
+        stationId: s.stationName || s.station?.name || s.stationId || s.relatedStation || "Unknown Station",
+        chargerId: s.chargerId || s.connectorId || s.charger?.id || "",
+        expiresAt: s.expiresAt || s.endTime || s.updatedAt || s.createdAt || new Date().toISOString(),
+        paymentMethod: s.paymentMethod || s.payment?.method || "OnSite",
+        status: s.status || "completed",
+        cost: typeof s.cost === "number" ? s.cost : Number.parseFloat(s.price || 0) || 0,
+        duration: s.duration || s.minutes || 0,
+        energyDelivered: s.energyDelivered || s.energy || s.kwh || 0,
+        date:
+          s.date ||
+          (s.createdAt ? new Date(s.createdAt).toISOString().split("T")[0] : new Date().toISOString().split("T")[0]),
+      }))
+    } catch (err) {
+      clearTimeout(timeout)
+      // Log and return empty array so UI can show "no history"
+      console.error("getHistory failed:", err)
+      return []
+    }
   },
+
+  // keep other api methods unchanged
   submitReclamation: async (data: Reclamation) => {
-    const res = await fetch(`http://localhost:5000/reclamations`, {
+    const res = await fetch(`${BASE}/reclamations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -69,7 +99,7 @@ const api = {
     return await res.json()
   },
   postReview: async (stationId: string, review: any) => {
-    const res = await fetch(`http://localhost:5000/stations/${stationId}/reviews`, {
+    const res = await fetch(`${BASE}/stations/${stationId}/reviews`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(review),
@@ -78,7 +108,7 @@ const api = {
     return await res.json()
   },
   updateProfile: async (userId: string, data: any) => {
-    const res = await fetch(`http://localhost:5000/car-owners/${userId}`, {
+    const res = await fetch(`${BASE}/car-owners/${userId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -87,12 +117,12 @@ const api = {
     return await res.json()
   },
   getFavorites: async (userId: string): Promise<string[]> => {
-    const res = await fetch(`http://localhost:5000/car-owners/${userId}/favorites`)
+    const res = await fetch(`${BASE}/car-owners/${userId}/favorites`)
     if (!res.ok) throw new Error("Failed to fetch favorites")
     return await res.json()
   },
   updateFavorites: async (userId: string, favorites: string[]) => {
-    const res = await fetch(`http://localhost:5000/car-owners/${userId}/favorites`, {
+    const res = await fetch(`${BASE}/car-owners/${userId}/favorites`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ favorites }),
@@ -154,7 +184,7 @@ export default function DriverDashboard({
   const [activeTab, setActiveTab] = useState("overview")
   const [editingVehicle, setEditingVehicle] = useState(false)
   const [tempVehicle, setTempVehicle] = useState<VehicleDetails>(
-    user?.vehicle || { make: "", model: "", primaryConnector: "CCS", adapters: [] }
+    user?.vehicle || { make: "", model: "", primaryConnector: "CCS", adapters: [] },
   )
 
   useEffect(() => {
@@ -210,11 +240,38 @@ export default function DriverDashboard({
 
   async function updateVehicle(v: VehicleDetails) {
     try {
-      // Persist to backend if endpoint; fallback to localStorage
-      localStorage.setItem("driverVehicle", JSON.stringify(v))
-      setUser(u => (u ? { ...u, vehicle: v } : u))
+      // Persist to backend then update local state
+      if (user?.id) {
+        // send vehicle details under a field your backend expects (vehicleDetails)
+        await api.updateProfile(user.id, { vehicleDetails: v })
+      } else {
+        // fallback: keep in localStorage for offline dev
+        localStorage.setItem("driverVehicle", JSON.stringify(v))
+      }
+
+      setVehicleData(v) // update local UI state
       setEditingVehicle(false)
-    } catch {}
+    } catch (err) {
+      console.error("Failed to update vehicle", err)
+      // keep UI responsive
+      setVehicleData(v)
+      setEditingVehicle(false)
+    }
+  }
+
+  // Save profile changes to backend
+  async function handleProfileSave() {
+    if (!user?.id) {
+      alert("User ID not found, please log in again.")
+      return
+    }
+    try {
+      await api.updateProfile(user.id, profileData)
+      setEditingProfile(false)
+    } catch (err) {
+      console.error("Failed to update profile", err)
+      alert("Failed to save changes. Please try again.")
+    }
   }
 
   return (
@@ -222,27 +279,15 @@ export default function DriverDashboard({
       <Tabs defaultValue="overview" className="w-full">
         <div className="bg-white border-b border-gray-200 px-6 py-4">
           <TabsList className="grid w-full grid-cols-6 bg-gray-100">
-            <TabsTrigger
-              value="overview"
-              className="flex items-center gap-2"
-              onClick={() => setActiveTab("overview")}
-            >
+            <TabsTrigger value="overview" className="flex items-center gap-2" onClick={() => setActiveTab("overview")}>
               <TrendingUp className="w-4 h-4" />
               Overview
             </TabsTrigger>
-            <TabsTrigger
-              value="profile"
-              className="flex items-center gap-2"
-              onClick={() => setActiveTab("profile")}
-            >
+            <TabsTrigger value="profile" className="flex items-center gap-2" onClick={() => setActiveTab("profile")}>
               <User className="w-4 h-4" />
               Profile
             </TabsTrigger>
-            <TabsTrigger
-              value="history"
-              className="flex items-center gap-2"
-              onClick={() => setActiveTab("history")}
-            >
+            <TabsTrigger value="history" className="flex items-center gap-2" onClick={() => setActiveTab("history")}>
               <Clock className="w-4 h-4" />
               History
             </TabsTrigger>
@@ -254,19 +299,11 @@ export default function DriverDashboard({
               <Heart className="w-4 h-4" />
               Favorites
             </TabsTrigger>
-            <TabsTrigger
-              value="support"
-              className="flex items-center gap-2"
-              onClick={() => setActiveTab("support")}
-            >
+            <TabsTrigger value="support" className="flex items-center gap-2" onClick={() => setActiveTab("support")}>
               <AlertTriangle className="w-4 h-4" />
               Support
             </TabsTrigger>
-            <TabsTrigger
-              value="settings"
-              className="flex items-center gap-2"
-              onClick={() => setActiveTab("settings")}
-            >
+            <TabsTrigger value="settings" className="flex items-center gap-2" onClick={() => setActiveTab("settings")}>
               <Settings className="w-4 h-4" />
               Settings
             </TabsTrigger>
@@ -283,87 +320,110 @@ export default function DriverDashboard({
                 exit={{ opacity: 0, y: -16 }}
                 className="space-y-6"
               >
-                {/* Welcome Header */}
-                <div className="bg-gradient-to-r from-emerald-500 to-lime-500 rounded-2xl p-6 text-white">
+                <div className="bg-gradient-to-br from-emerald-500 via-lime-500 to-green-500 rounded-2xl p-8 text-white shadow-lg">
                   <div className="flex items-center justify-between">
-                    <div>
-                      <h2 className="text-2xl font-bold mb-2">Welcome back, {user.fullName.split(" ")[0]}!</h2>
-                      <p className="text-white/80">
-                        You've saved {totalCost.toFixed(2)} TND on {totalSessions} charging sessions
+                    <div className="flex-1">
+                      <h2 className="text-3xl font-bold mb-3">Welcome back, {user.fullName.split(" ")[0]}!</h2>
+                      <p className="text-white/90 text-lg mb-4">
+                        You've saved <span className="font-semibold">{totalCost.toFixed(2)} TND</span> on{" "}
+                        <span className="font-semibold">{totalSessions}</span> charging sessions
                       </p>
+                      <div className="flex items-center space-x-4 text-white/80">
+                        <div className="flex items-center space-x-1">
+                          <Zap className="w-4 h-4" />
+                          <span className="text-sm">{totalEnergy.toFixed(1)} kWh consumed</span>
+                        </div>
+                        <div className="flex items-center space-x-1">
+                          <Star className="w-4 h-4" />
+                          <span className="text-sm">{avgRating} avg rating</span>
+                        </div>
+                      </div>
                     </div>
                     <div className="text-right">
-                      <div className="text-3xl font-bold">{totalSessions}</div>
-                      <div className="text-white/80">Sessions</div>
+                      <div className="text-4xl font-bold mb-1">{totalSessions}</div>
+                      <div className="text-white/80 text-sm font-medium">Total Sessions</div>
+                      <div className="mt-2 px-3 py-1 bg-white/20 rounded-full text-xs font-medium">Active Driver</div>
                     </div>
                   </div>
                 </div>
 
-                {/* Stats Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                  <Card>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <Card className="hover:shadow-lg transition-shadow duration-200 border-0 shadow-md">
                     <CardContent className="p-6 text-center">
-                      <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center mx-auto mb-3">
-                        <Zap className="w-6 h-6 text-emerald-600" />
+                      <div className="w-16 h-16 bg-gradient-to-br from-emerald-100 to-emerald-200 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                        <Zap className="w-8 h-8 text-emerald-600" />
                       </div>
-                      <div className="text-2xl font-bold text-gray-900">{totalEnergy.toFixed(1)} kWh</div>
-                      <div className="text-sm text-gray-600">Energy Consumed</div>
+                      <div className="text-3xl font-bold text-gray-900 mb-1">{totalEnergy.toFixed(1)} kWh</div>
+                      <div className="text-sm text-gray-600 font-medium">Energy Consumed</div>
+                      <div className="text-xs text-emerald-600 mt-1">+12% this month</div>
                     </CardContent>
                   </Card>
-                  <Card>
+                  <Card className="hover:shadow-lg transition-shadow duration-200 border-0 shadow-md">
                     <CardContent className="p-6 text-center">
-                      <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center mx-auto mb-3">
-                        <CreditCard className="w-6 h-6 text-blue-600" />
+                      <div className="w-16 h-16 bg-gradient-to-br from-blue-100 to-blue-200 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                        <CreditCard className="w-8 h-8 text-blue-600" />
                       </div>
-                      <div className="text-2xl font-bold text-gray-900">{totalCost.toFixed(2)} TND</div>
-                      <div className="text-sm text-gray-600">Total Spent</div>
+                      <div className="text-3xl font-bold text-gray-900 mb-1">{totalCost.toFixed(2)} TND</div>
+                      <div className="text-sm text-gray-600 font-medium">Total Spent</div>
+                      <div className="text-xs text-blue-600 mt-1">
+                        Avg: {(totalCost / totalSessions || 0).toFixed(1)} TND/session
+                      </div>
                     </CardContent>
                   </Card>
-                  <Card>
+                  <Card className="hover:shadow-lg transition-shadow duration-200 border-0 shadow-md">
                     <CardContent className="p-6 text-center">
-                      <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center mx-auto mb-3">
-                        <Star className="w-6 h-6 text-purple-600" />
+                      <div className="w-16 h-16 bg-gradient-to-br from-orange-100 to-orange-200 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                        <Heart className="w-8 h-8 text-orange-600" />
                       </div>
-                      <div className="text-2xl font-bold text-gray-900">{avgRating}</div>
-                      <div className="text-sm text-gray-600">Avg Rating</div>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardContent className="p-6 text-center">
-                      <div className="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center mx-auto mb-3">
-                        <Heart className="w-6 h-6 text-orange-600" />
-                      </div>
-                      <div className="text-2xl font-bold text-gray-900">{favorites.length}</div>
-                      <div className="text-sm text-gray-600">Favorite Stations</div>
+                      <div className="text-3xl font-bold text-gray-900 mb-1">{favorites.length}</div>
+                      <div className="text-sm text-gray-600 font-medium">Favorite Stations</div>
+                      <div className="text-xs text-orange-600 mt-1">Quick access saved</div>
                     </CardContent>
                   </Card>
                 </div>
 
-                {/* Recent Activity */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center space-x-2">
-                      <Clock className="w-5 h-5" />
-                      <span>Recent Activity</span>
+                <Card className="shadow-md border-0">
+                  <CardHeader className="pb-4">
+                    <CardTitle className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <Clock className="w-5 h-5 text-emerald-600" />
+                        <span className="text-xl font-semibold">Recent Activity</span>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-emerald-600 border-emerald-200 hover:bg-emerald-50 bg-transparent"
+                      >
+                        View All
+                      </Button>
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
-                      {history.slice(0, 3).map((session) => (
-                        <div key={session.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                          <div className="flex items-center space-x-3">
-                            <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center">
-                              <Zap className="w-5 h-5 text-emerald-600" />
+                      {history.slice(0, 3).map((session, index) => (
+                        <div
+                          key={session.id}
+                          className="flex items-center justify-between p-4 bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl hover:from-emerald-50 hover:to-lime-50 transition-colors duration-200"
+                        >
+                          <div className="flex items-center space-x-4">
+                            <div className="w-12 h-12 bg-gradient-to-br from-emerald-100 to-lime-100 rounded-full flex items-center justify-center">
+                              <Zap className="w-6 h-6 text-emerald-600" />
                             </div>
                             <div>
-                              <div className="font-medium text-gray-900">{session.stationId}</div>
-                              <div className="text-sm text-gray-600">
-                                {session.energyDelivered}kWh • {session.duration}min
+                              <div className="font-semibold text-gray-900">{session.stationId}</div>
+                              <div className="text-sm text-gray-600 flex items-center space-x-3">
+                                <span>{session.energyDelivered}kWh</span>
+                                <span>•</span>
+                                <span>{session.duration}min</span>
+                                <span>•</span>
+                                <Badge variant="outline" className="text-xs">
+                                  {session.paymentMethod}
+                                </Badge>
                               </div>
                             </div>
                           </div>
                           <div className="text-right">
-                            <div className="font-medium text-gray-900">{session.cost} TND</div>
+                            <div className="font-semibold text-gray-900 text-lg">{session.cost} TND</div>
                             <div className="text-sm text-gray-600">{session.date}</div>
                           </div>
                         </div>
@@ -477,13 +537,7 @@ export default function DriverDashboard({
                     </div>
                     {editingProfile && (
                       <div className="flex space-x-3 pt-4">
-                        <Button
-                          onClick={async () => {
-                            await api.updateProfile(user.id, profileData)
-                            setEditingProfile(false)
-                          }}
-                          className="bg-emerald-600 hover:bg-emerald-700"
-                        >
+                        <Button onClick={handleProfileSave} className="bg-emerald-600 hover:bg-emerald-700">
                           Save Changes
                         </Button>
                         <Button variant="outline" onClick={() => setEditingProfile(false)}>
@@ -539,7 +593,7 @@ export default function DriverDashboard({
                     <h3 className="font-semibold text-sm text-gray-700">Vehicle & Connectors</h3>
                     <button
                       className="text-xs text-emerald-600 hover:underline"
-                      onClick={() => setEditingVehicle(e => !e)}
+                      onClick={() => setEditingVehicle((e) => !e)}
                     >
                       {editingVehicle ? "Done" : "Edit"}
                     </button>
@@ -555,27 +609,25 @@ export default function DriverDashboard({
                       <select
                         className="input text-xs"
                         value={tempVehicle.primaryConnector}
-                        onChange={e =>
-                          setTempVehicle(v => ({ ...v, primaryConnector: e.target.value as ConnectorType }))
+                        onChange={(e) =>
+                          setTempVehicle((v) => ({ ...v, primaryConnector: e.target.value as ConnectorType }))
                         }
                       >
-                        {CONNECTOR_TYPES.map(c => (
+                        {CONNECTORS.map((c) => (
                           <option key={c}>{c}</option>
                         ))}
                       </select>
                       <div className="flex flex-wrap gap-1">
-                        {CONNECTOR_TYPES.filter(c => c !== tempVehicle.primaryConnector).map(c => {
+                        {CONNECTORS.filter((c) => c !== tempVehicle.primaryConnector).map((c) => {
                           const active = tempVehicle.adapters.includes(c)
                           return (
                             <button
                               key={c}
                               type="button"
                               onClick={() =>
-                                setTempVehicle(v => ({
+                                setTempVehicle((v) => ({
                                   ...v,
-                                  adapters: active
-                                    ? v.adapters.filter(a => a !== c)
-                                    : [...v.adapters, c],
+                                  adapters: active ? v.adapters.filter((a) => a !== c) : [...v.adapters, c],
                                 }))
                               }
                               className={`px-2 py-1 rounded text-[10px] border ${

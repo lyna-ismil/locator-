@@ -7,58 +7,17 @@ import { Car, Zap, AlertTriangle, MapPin, Star, MessageSquare, Coffee, Wifi, Ute
 import type { Station, CarOwner, Connector } from "../types"
 
 export default function StationDetails({
-  stationId,
+  station, // now accept full station object
   user,
   onReserve,
   onClose,
 }: {
-  stationId: string
+  station: Station
   user: CarOwner
   onReserve: (chargerId: string) => void
   onClose: () => void
 }) {
-  const [station, setStation] = useState<Station | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    async function fetchStation() {
-      setLoading(true)
-      setError(null)
-      try {
-        const res = await fetch(`http://localhost:5000/stations/${stationId}`)
-        if (!res.ok) throw new Error("Failed to fetch station details")
-        const data = await res.json()
-        setStation(data)
-      } catch (err: any) {
-        setError("Unable to load station details. Please try again later.")
-        setStation(null)
-      }
-      setLoading(false)
-    }
-    fetchStation()
-  }, [stationId])
-
-  if (loading) {
-    return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div className="bg-white p-8 rounded shadow">Loading station details...</div>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div className="bg-white p-8 rounded shadow text-red-600">{error}</div>
-        <Button className="mt-4" onClick={onClose}>Close</Button>
-      </div>
-    )
-  }
-
-  if (!station) {
-    return null
-  }
+  if (!station) return null
 
   const compatibleConnectors = [user.vehicleDetails.primaryConnector, ...(user.vehicleDetails.adapters || [])]
   const compatibleChargers = station.connectors?.filter((c: Connector) => compatibleConnectors.includes(c.type)) ?? []
@@ -78,6 +37,35 @@ export default function StationDetails({
         return null
     }
   }
+
+  // Fetch recent reviews for this station from backend
+  const BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5000").replace(/\/$/, "")
+  const [reviews, setReviews] = useState<any[]>(station.reviews ?? [])
+  const [reviewsLoading, setReviewsLoading] = useState(false)
+
+  useEffect(() => {
+    if (!station?.id) return
+    const ac = new AbortController()
+    setReviewsLoading(true)
+    fetch(`${BASE}/reviews?stationId=${encodeURIComponent(station.id)}`, { signal: ac.signal })
+      .then(async (res) => {
+        if (!res.ok) {
+          const txt = await res.text().catch(() => res.statusText)
+          throw new Error(txt || "Failed to load reviews")
+        }
+        return res.json()
+      })
+      .then((data) => {
+        if (Array.isArray(data)) setReviews(data)
+        else if (data.reviews && Array.isArray(data.reviews)) setReviews(data.reviews)
+      })
+      .catch((err) => {
+        if (err.name !== "AbortError") console.error("Failed to load reviews:", err)
+      })
+      .finally(() => setReviewsLoading(false))
+
+    return () => ac.abort()
+  }, [station.id, BASE])
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -106,7 +94,7 @@ export default function StationDetails({
               <CardContent className="p-4 text-center">
                 <MapPin className="w-6 h-6 text-emerald-600 mx-auto mb-2" />
                 <div className="text-sm text-gray-600">Distance</div>
-                <div className="font-semibold text-gray-800">{station.distance?.toFixed(1) ?? "--"} km</div>
+                <div className="font-semibold text-gray-800">{(station.distance ?? "--")?.toString()?.includes(".") ? station.distance?.toFixed?.(1) : station.distance ?? "--"} km</div>
               </CardContent>
             </Card>
             <Card className="bg-blue-50 border-blue-200">
@@ -192,8 +180,8 @@ export default function StationDetails({
                       </div>
                       <Button
                         className="bg-emerald-600 hover:bg-emerald-700"
-                        onClick={() => onReserve(c.id ?? c.type)}
-                        disabled={c.status !== "Available"}
+                        onClick={() => onReserve(c.id)}
+                        disabled={c.status !== "available"}
                       >
                         Reserve
                       </Button>
@@ -235,17 +223,19 @@ export default function StationDetails({
             </h3>
             <Card className="bg-gray-50">
               <CardContent className="p-4">
-                {station.reviews && station.reviews.length > 0 ? (
-                  station.reviews.slice(0, 1).map((review, idx) => (
-                    <div key={idx}>
+                {reviewsLoading ? (
+                  <div className="text-sm text-gray-600">Loading reviews...</div>
+                ) : reviews && reviews.length > 0 ? (
+                  reviews.slice(0, 2).map((review, idx) => (
+                    <div key={idx} className="mb-3">
                       <div className="text-sm text-gray-600 italic">"{review.text}"</div>
                       <div className="flex items-center gap-2 mt-2">
                         <div className="flex text-yellow-400">
-                          {[...Array(review.rating)].map((_, i) => (
+                          {[...Array(review.rating || 5)].map((_, i) => (
                             <Star key={i} className="w-4 h-4 fill-current" />
                           ))}
                         </div>
-                        <span className="text-xs text-gray-500">- {review.user}</span>
+                        <span className="text-xs text-gray-500">- {review.user || review.userId || "Customer"}</span>
                       </div>
                     </div>
                   ))
