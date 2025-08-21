@@ -28,7 +28,7 @@ import {
   Zap,
   TrendingUp,
 } from "lucide-react"
-import type { CarOwner, Reclamation, Reservation } from "../types"
+import { CONNECTOR_TYPES, ConnectorType, VehicleDetails, CarOwner } from "../types"
 
 const api = {
   getHistory: async (email: string): Promise<Reservation[]> => {
@@ -144,6 +144,11 @@ export default function DriverDashboard({
       autoReserve: false,
     },
   })
+  const [activeTab, setActiveTab] = useState("overview")
+  const [editingVehicle, setEditingVehicle] = useState(false)
+  const [tempVehicle, setTempVehicle] = useState<VehicleDetails>(
+    user?.vehicle || { make: "", model: "", primaryConnector: "CCS", adapters: [] }
+  )
 
   useEffect(() => {
     api.getHistory(user.email).then(setHistory)
@@ -180,32 +185,65 @@ export default function DriverDashboard({
     setReviewText("")
   }
 
+  async function updateVehicle(v: VehicleDetails) {
+    try {
+      // Persist to backend if endpoint; fallback to localStorage
+      localStorage.setItem("driverVehicle", JSON.stringify(v))
+      setUser(u => (u ? { ...u, vehicle: v } : u))
+      setEditingVehicle(false)
+    } catch {}
+  }
+
   return (
     <div className="h-full bg-gray-50 overflow-y-auto">
       <Tabs defaultValue="overview" className="w-full">
         <div className="bg-white border-b border-gray-200 px-6 py-4">
           <TabsList className="grid w-full grid-cols-6 bg-gray-100">
-            <TabsTrigger value="overview" className="flex items-center gap-2">
+            <TabsTrigger
+              value="overview"
+              className="flex items-center gap-2"
+              onClick={() => setActiveTab("overview")}
+            >
               <TrendingUp className="w-4 h-4" />
               Overview
             </TabsTrigger>
-            <TabsTrigger value="profile" className="flex items-center gap-2">
+            <TabsTrigger
+              value="profile"
+              className="flex items-center gap-2"
+              onClick={() => setActiveTab("profile")}
+            >
               <User className="w-4 h-4" />
               Profile
             </TabsTrigger>
-            <TabsTrigger value="history" className="flex items-center gap-2">
+            <TabsTrigger
+              value="history"
+              className="flex items-center gap-2"
+              onClick={() => setActiveTab("history")}
+            >
               <Clock className="w-4 h-4" />
               History
             </TabsTrigger>
-            <TabsTrigger value="favorites" className="flex items-center gap-2">
+            <TabsTrigger
+              value="favorites"
+              className="flex items-center gap-2"
+              onClick={() => setActiveTab("favorites")}
+            >
               <Heart className="w-4 h-4" />
               Favorites
             </TabsTrigger>
-            <TabsTrigger value="support" className="flex items-center gap-2">
+            <TabsTrigger
+              value="support"
+              className="flex items-center gap-2"
+              onClick={() => setActiveTab("support")}
+            >
               <AlertTriangle className="w-4 h-4" />
               Support
             </TabsTrigger>
-            <TabsTrigger value="settings" className="flex items-center gap-2">
+            <TabsTrigger
+              value="settings"
+              className="flex items-center gap-2"
+              onClick={() => setActiveTab("settings")}
+            >
               <Settings className="w-4 h-4" />
               Settings
             </TabsTrigger>
@@ -214,8 +252,14 @@ export default function DriverDashboard({
 
         <div className="p-6">
           <AnimatePresence mode="wait">
-            <TabsContent value="overview" className="mt-0">
-              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+            {activeTab === "overview" && (
+              <motion.div
+                key="overview"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-6"
+              >
                 {/* Welcome Header */}
                 <div className="bg-gradient-to-r from-emerald-500 to-lime-500 rounded-2xl p-6 text-white">
                   <div className="flex items-center justify-between">
@@ -305,10 +349,15 @@ export default function DriverDashboard({
                   </CardContent>
                 </Card>
               </motion.div>
-            </TabsContent>
-
-            <TabsContent value="profile" className="mt-0">
-              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+            )}
+            {activeTab === "profile" && (
+              <motion.div
+                key="profile"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-6"
+              >
                 {/* Profile Header */}
                 <Card>
                   <CardContent className="p-6">
@@ -407,8 +456,8 @@ export default function DriverDashboard({
                       <div className="flex space-x-3 pt-4">
                         <Button
                           onClick={async () => {
-                            await api.updateProfile(user.id, profileData);
-                            setEditingProfile(false);
+                            await api.updateProfile(user.id, profileData)
+                            setEditingProfile(false)
                           }}
                           className="bg-emerald-600 hover:bg-emerald-700"
                         >
@@ -460,11 +509,85 @@ export default function DriverDashboard({
                     </Button>
                   </CardContent>
                 </Card>
-              </motion.div>
-            </TabsContent>
 
-            <TabsContent value="settings" className="mt-0">
-              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+                {/* Editable Vehicle Section */}
+                <div className="border rounded-lg p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-sm text-gray-700">Vehicle & Connectors</h3>
+                    <button
+                      className="text-xs text-emerald-600 hover:underline"
+                      onClick={() => setEditingVehicle(e => !e)}
+                    >
+                      {editingVehicle ? "Done" : "Edit"}
+                    </button>
+                  </div>
+                  {!editingVehicle && user?.vehicle && (
+                    <div className="text-xs text-gray-600 space-y-1">
+                      <div>Primary: {user.vehicle.primaryConnector}</div>
+                      <div>Adapters: {user.vehicle.adapters?.length ? user.vehicle.adapters.join(", ") : "None"}</div>
+                    </div>
+                  )}
+                  {editingVehicle && (
+                    <div className="space-y-3">
+                      <select
+                        className="input text-xs"
+                        value={tempVehicle.primaryConnector}
+                        onChange={e =>
+                          setTempVehicle(v => ({ ...v, primaryConnector: e.target.value as ConnectorType }))
+                        }
+                      >
+                        {CONNECTOR_TYPES.map(c => (
+                          <option key={c}>{c}</option>
+                        ))}
+                      </select>
+                      <div className="flex flex-wrap gap-1">
+                        {CONNECTOR_TYPES.filter(c => c !== tempVehicle.primaryConnector).map(c => {
+                          const active = tempVehicle.adapters.includes(c)
+                          return (
+                            <button
+                              key={c}
+                              type="button"
+                              onClick={() =>
+                                setTempVehicle(v => ({
+                                  ...v,
+                                  adapters: active
+                                    ? v.adapters.filter(a => a !== c)
+                                    : [...v.adapters, c],
+                                }))
+                              }
+                              className={`px-2 py-1 rounded text-[10px] border ${
+                                active
+                                  ? "bg-emerald-600 text-white border-emerald-600"
+                                  : "bg-gray-100 text-gray-600 border-gray-200"
+                              }`}
+                            >
+                              {c}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <button
+                        type="button"
+                        className="text-xs bg-emerald-600 text-white px-3 py-1 rounded"
+                        onClick={async () => {
+                          await updateVehicle(tempVehicle)
+                        }}
+                      >
+                        Save Vehicle
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
+            {activeTab === "settings" && (
+              <motion.div
+                key="settings"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-6"
+              >
                 {/* Notifications */}
                 <Card>
                   <CardHeader>
@@ -608,10 +731,15 @@ export default function DriverDashboard({
                   </CardContent>
                 </Card>
               </motion.div>
-            </TabsContent>
-
-            <TabsContent value="history" className="mt-0">
-              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+            )}
+            {activeTab === "history" && (
+              <motion.div
+                key="history"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-4"
+              >
                 <div className="flex items-center gap-2 mb-4">
                   <Clock className="w-5 h-5 text-emerald-600" />
                   <h3 className="font-semibold text-gray-800">Charging History</h3>
@@ -642,10 +770,15 @@ export default function DriverDashboard({
                   </div>
                 )}
               </motion.div>
-            </TabsContent>
-
-            <TabsContent value="favorites" className="mt-0">
-              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+            )}
+            {activeTab === "favorites" && (
+              <motion.div
+                key="favorites"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-4"
+              >
                 <div className="flex items-center gap-2 mb-4">
                   <Heart className="w-5 h-5 text-red-500" />
                   <h3 className="font-semibold text-gray-800">Favorite Stations</h3>
@@ -668,10 +801,15 @@ export default function DriverDashboard({
                   </div>
                 )}
               </motion.div>
-            </TabsContent>
-
-            <TabsContent value="support" className="mt-0">
-              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+            )}
+            {activeTab === "support" && (
+              <motion.div
+                key="support"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-4"
+              >
                 <div className="flex items-center gap-2 mb-4">
                   <AlertTriangle className="w-5 h-5 text-orange-500" />
                   <h3 className="font-semibold text-gray-800">Report Issues</h3>
@@ -707,7 +845,7 @@ export default function DriverDashboard({
                   </CardContent>
                 </Card>
               </motion.div>
-            </TabsContent>
+            )}
           </AnimatePresence>
         </div>
       </Tabs>

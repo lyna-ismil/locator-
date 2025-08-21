@@ -1,223 +1,286 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from "react-leaflet"
-import type { LatLngExpression } from "leaflet"
+import { useEffect, useMemo } from "react"
+import {
+  MapContainer,
+  TileLayer,
+  Marker,
+  Popup,
+  Tooltip,
+  useMap,
+} from "react-leaflet"
 import L from "leaflet"
 import "leaflet/dist/leaflet.css"
-import { Badge } from "@/components/ui/badge"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
-import { Label } from "@/components/ui/label"
-import { cn } from "@/lib/utils"
-import { Zap, MapPin, Star } from 'lucide-react'
 
-export type Station = {
-  id: number
-  name: string
-  position: LatLngExpression
-  city: string
-  connectors: Array<"Type 2" | "CCS" | "CHAdeMO" | "Tesla">
-  speedKw: number
-  available: number
-  total: number
-  price: string
-  rating: number
+interface RawStation {
+  id?: string
+  _id?: string
+  stationName?: string
+  name?: string
+  title?: string
+  network?: string
+  provider?: string
+  operator?: string
+  pricing?: any
+  price?: string
+  availability?: number
+  availablePorts?: number
+  slotsAvailable?: number
+  connectors?: { status?: string }[]
+  location?: any
+  [k: string]: any
 }
 
-export const STATIONS: Station[] = [
-  { id: 1, name: "Tunis Centre - Avenue Habib", position: [36.8065, 10.1815], city: "Tunis", connectors: ["Type 2", "CCS"], speedKw: 150, available: 3, total: 6, price: "0.35 TND/kWh", rating: 4.8 },
-  { id: 2, name: "La Marsa Coastal Hub", position: [36.8782, 10.3246], city: "La Marsa", connectors: ["Type 2"], speedKw: 22, available: 5, total: 8, price: "0.28 TND/kWh", rating: 4.4 },
-  { id: 3, name: "Sfax Business Park", position: [34.7406, 10.7603], city: "Sfax", connectors: ["CCS", "CHAdeMO"], speedKw: 50, available: 2, total: 4, price: "0.31 TND/kWh", rating: 4.5 },
-  { id: 4, name: "Sousse Mall FastCharge", position: [35.8256, 10.6369], city: "Sousse", connectors: ["CCS", "Tesla"], speedKw: 250, available: 1, total: 6, price: "0.42 TND/kWh", rating: 4.9 },
-  { id: 5, name: "Bizerte Port Station", position: [37.2746, 9.8739], city: "Bizerte", connectors: ["Type 2", "CHAdeMO"], speedKw: 50, available: 2, total: 3, price: "0.30 TND/kWh", rating: 4.3 },
-  { id: 6, name: "Nabeul City Centre", position: [36.4513, 10.735], city: "Nabeul", connectors: ["Type 2"], speedKw: 22, available: 4, total: 5, price: "0.26 TND/kWh", rating: 4.2 },
-  { id: 7, name: "Kairouan Historic Stop", position: [35.6781, 10.0963], city: "Kairouan", connectors: ["Type 2", "CCS"], speedKw: 150, available: 2, total: 4, price: "0.36 TND/kWh", rating: 4.6 },
-  { id: 8, name: "Gabes Oasis Station", position: [33.8815, 10.0982], city: "Gabes", connectors: ["CCS"], speedKw: 150, available: 1, total: 3, price: "0.38 TND/kWh", rating: 4.4 },
-  { id: 9, name: "Gafsa Transit Hub", position: [34.425, 8.7842], city: "Gafsa", connectors: ["CHAdeMO"], speedKw: 50, available: 1, total: 2, price: "0.29 TND/kWh", rating: 4.0 },
-  { id: 10, name: "Monastir Airport Station", position: [35.7777, 10.8262], city: "Monastir", connectors: ["CCS", "Tesla"], speedKw: 250, available: 2, total: 5, price: "0.41 TND/kWh", rating: 4.7 },
-  { id: 11, name: "Djerba Houmt Souk", position: [33.875, 10.857], city: "Djerba", connectors: ["Type 2", "CCS"], speedKw: 150, available: 3, total: 5, price: "0.34 TND/kWh", rating: 4.5 },
-]
+interface Props {
+  center?: { lat: number; lng: number } | null   // made optional / nullable
+  stations: RawStation[]
+  onMarkerClick?: (id: string) => void
+  height?: string
+  className?: string
+  fallbackZoom?: number
+  userLocation?: { lat: number; lng: number } | null
+  showUserLocation?: boolean
+  debug?: boolean
+}
 
-function FitToMarkers({ positions }: { positions: LatLngExpression[] }) {
+type MarkerStation = {
+  id: string
+  name: string
+  lat: number
+  lng: number
+  availability?: number
+  network?: string
+  pricing?: string
+  raw: RawStation
+}
+
+function colorFromAvailability(st: MarkerStation) {
+  const a =
+    st.availability ??
+    st.raw.availability ??
+    st.raw.availablePorts ??
+    st.raw.slotsAvailable
+  if (a == null) return "#6b7280"
+  if (a === 0) return "#dc2626"
+  if (a === 1) return "#f59e0b"
+  return "#059669"
+}
+
+/* Icon cache */
+const iconFactory = (() => {
+  const cache = new Map<string, L.DivIcon>()
+  return (color: string) => {
+    if (cache.has(color)) return cache.get(color)!
+    const icon = L.divIcon({
+      className: "station-pin",
+      html: `<div style="
+        width:26px;height:26px;border-radius:50%;
+        background:${color};
+        display:flex;align-items:center;justify-content:center;
+        color:#fff;font-size:13px;font-weight:600;
+        box-shadow:0 0 0 2px #fff,0 4px 10px rgba(0,0,0,.25);
+      ">⚡</div>`,
+      iconSize: [26,26],
+      iconAnchor: [13,13],
+      popupAnchor: [0,-13],
+    })
+    cache.set(color, icon)
+    return icon
+  }
+})()
+
+const userIcon = L.divIcon({
+  className: "user-pin",
+  html: `<div style="
+    width:18px;height:18px;border-radius:50%;
+    background:#2563eb;
+    box-shadow:0 0 0 3px rgba(59,130,246,.35),0 0 0 5px rgba(255,255,255,.9);
+    border:2px solid #fff;
+  "></div>`,
+  iconSize: [18,18],
+  iconAnchor: [9,9],
+})
+
+/* Auto-fit */
+function FitBounds({
+  stations,
+  center,
+  userLocation,
+}: {
+  stations: MarkerStation[]
+  center: { lat: number; lng: number }
+  userLocation?: { lat: number; lng: number } | null
+}) {
   const map = useMap()
   useEffect(() => {
-    if (!positions.length) return
-    const bounds = L.latLngBounds(positions as [number, number][])
-    map.fitBounds(bounds, { padding: [24, 24] })
-  }, [positions, map])
+    const pts: L.LatLngExpression[] = []
+    stations.forEach((s) => pts.push([s.lat, s.lng]))
+    if (userLocation) pts.push([userLocation.lat, userLocation.lng])
+    if (!pts.length) {
+      map.setView([center.lat, center.lng], 8)
+      return
+    }
+    if (pts.length === 1) {
+      map.setView(pts[0], 14)
+      return
+    }
+    const bounds = L.latLngBounds(pts)
+    map.fitBounds(bounds, { padding: [40, 40] })
+  }, [stations, center, userLocation, map])
   return null
 }
 
-type Props = {
-  className?: string
-  height?: number
-  defaultConnector?: "all" | "Type 2" | "CCS" | "CHAdeMO" | "Tesla"
-  defaultMinKw?: "any" | "22" | "50" | "150" | "250"
-  batteryCapacityKwh?: number
-  currentSoC?: number
-  vehicleMaxKw?: number
-}
-
-export default function MapTunisia({
-  className,
-  height = 480,
-  defaultConnector = "all",
-  defaultMinKw = "any",
-  batteryCapacityKwh = 60,
-  currentSoC = 30,
-  vehicleMaxKw = 150,
+export default function TunisiaMap({
+  center,
+  stations,
+  onMarkerClick,
+  height = "100%",
+  className = "",
+  fallbackZoom = 7,
+  userLocation,
+  showUserLocation = true,
+  debug = false,
 }: Props) {
-  const [connector, setConnector] = useState<typeof defaultConnector>(defaultConnector)
-  const [minKw, setMinKw] = useState<typeof defaultMinKw>(defaultMinKw)
-  const [onlyAvailable, setOnlyAvailable] = useState(false)
+  const markerStations: MarkerStation[] = useMemo(() => {
+    if (!Array.isArray(stations) || stations.length === 0) {
+      if (debug) console.debug("[Map] No stations array or empty.")
+      return []
+    }
+    const mapped = stations
+      .map((s: any) => {
+        const coords = s.location
+        if (!coords || !isFinite(coords.lat) || !isFinite(coords.lng)) {
+          if (debug) console.warn("[Map] Invalid coords", s.id || s._id, s.location)
+          return null
+        }
+        const name = s.stationName || s.name || s.title || "Unnamed Station"
+        const availability = s.availability ?? s.availablePorts ?? s.slotsAvailable
+        let pricingText = ""
+        if (s.pricing) {
+          if (typeof s.pricing === "string") pricingText = s.pricing
+          else {
+            const parts:string[] = []
+            if (s.pricing.perkWh) parts.push(`${s.pricing.perkWh}/kWh`)
+            if (s.pricing.perHour) parts.push(`${s.pricing.perHour}/h`)
+            if (s.pricing.sessionFee) parts.push(`Fee ${s.pricing.sessionFee}`)
+            pricingText = parts.join(" • ")
+          }
+        } else if (s.price) pricingText = s.price
 
-  const filtered = useMemo(() => {
-    return STATIONS.filter((s) => {
-      if (connector !== "all" && !s.connectors.includes(connector)) return false
-      const minKwNum = minKw === "any" ? 0 : Number(minKw)
-      if (s.speedKw < minKwNum) return false
-      if (onlyAvailable && s.available <= 0) return false
-      return true
-    })
-  }, [connector, minKw, onlyAvailable])
+        return {
+          id: s.id || s._id || `${coords.lat},${coords.lng}`,
+          name,
+          lat: coords.lat,
+          lng: coords.lng,
+          availability,
+          network: s.network || s.provider || s.operator || "",
+          pricing: pricingText,
+          raw: s,
+        } as MarkerStation
+      })
+      .filter((v): v is MarkerStation => !!v)
+    if (debug) {
+      console.debug("[Map] Stations in:", stations.length)
+      console.debug("[Map] Valid markers:", mapped.length)
+    }
+    return mapped
+  }, [stations, debug])
 
-  const center: LatLngExpression = [33.8869, 9.5375] // Tunisia
+  // Derive a safe center
+  const effectiveCenter = useMemo(() => {
+    if (center && isFinite(center.lat) && isFinite(center.lng)) return center
+    if (markerStations.length) {
+      // average of marker coords
+      const sum = markerStations.reduce(
+        (acc, s) => {
+          acc.lat += s.lat
+          acc.lng += s.lng
+          return acc
+        },
+        { lat: 0, lng: 0 }
+      )
+      return {
+        lat: sum.lat / markerStations.length,
+        lng: sum.lng / markerStations.length,
+      }
+    }
+    // Tunisia approximate center fallback
+    return { lat: 34.0, lng: 9.0 }
+  }, [center, markerStations])
 
-  function colorBySpeed(kw: number) {
-    if (kw >= 200) return "#059669" // emerald-600
-    if (kw >= 100) return "#10b981" // emerald-500
-    if (kw >= 50) return "#f59e0b" // amber-500
-    return "#eab308" // amber-400
-  }
-
-  function estimateMinutes(stationKw: number) {
-    const effKw = Math.min(vehicleMaxKw || Infinity, stationKw)
-    const energyNeeded = batteryCapacityKwh * (1 - (currentSoC ?? 0) / 100)
-    if (!(effKw > 0) || !(energyNeeded > 0)) return Infinity
-    return (energyNeeded / effKw) * 60
-  }
-
-  function fmtEta(mins: number) {
-    if (!Number.isFinite(mins) || mins <= 0) return "-"
-    const h = Math.floor(mins / 60)
-    const m = Math.round(mins % 60)
-    if (h <= 0) return `${m} min`
-    return `${h}h ${m}m`
-  }
+  const hasAnyCenter =
+    effectiveCenter && isFinite(effectiveCenter.lat) && isFinite(effectiveCenter.lng)
 
   return (
-    <div className={cn("w-full rounded-2xl border border-gray-100 shadow-sm bg-white", className)}>
-      {/* Header / Controls */}
-      <div className="p-4 border-b flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
-        <div className="flex items-center gap-2">
-          <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-lime-500 to-emerald-600 grid place-items-center">
-            <Zap className="h-5 w-5 text-white" />
-          </div>
-          <div>
-            <div className="font-semibold leading-none">Tunisia Charging Map</div>
-            <div className="text-xs text-gray-500">
-              Battery {batteryCapacityKwh} kWh · {currentSoC}% now · Vehicle max {vehicleMaxKw} kW
-            </div>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <Label className="text-xs text-gray-600">Connector</Label>
-            <Select value={connector} onValueChange={(v) => setConnector(v as any)}>
-              <SelectTrigger className="h-8">
-                <SelectValue placeholder="All" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="Type 2">Type 2</SelectItem>
-                <SelectItem value="CCS">CCS</SelectItem>
-                <SelectItem value="CHAdeMO">CHAdeMO</SelectItem>
-                <SelectItem value="Tesla">Tesla</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex items-center gap-2">
-            <Label className="text-xs text-gray-600">Min kW</Label>
-            <Select value={minKw} onValueChange={(v) => setMinKw(v as any)}>
-              <SelectTrigger className="h-8">
-                <SelectValue placeholder="Any" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="any">Any</SelectItem>
-                <SelectItem value="22">22 kW</SelectItem>
-                <SelectItem value="50">50 kW</SelectItem>
-                <SelectItem value="150">150 kW</SelectItem>
-                <SelectItem value="250">250 kW</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex items-center gap-2">
-            <Switch id="only-available" checked={onlyAvailable} onCheckedChange={setOnlyAvailable} />
-            <Label htmlFor="only-available" className="text-sm text-gray-700">
-              Only available
-            </Label>
-          </div>
-          <Badge variant="secondary" className="whitespace-nowrap">
-            {filtered.length} stations
-          </Badge>
-        </div>
-      </div>
-
-      {/* Map */}
-      <div style={{ height }}>
-        <MapContainer center={center} zoom={6} scrollWheelZoom style={{ height: "100%", width: "100%" }}>
-          <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-          <FitToMarkers positions={filtered.map((s) => s.position)} />
-          {filtered.map((s) => {
-            const eta = estimateMinutes(s.speedKw)
-            const effective = Math.min(vehicleMaxKw || Infinity, s.speedKw)
+    <div
+      style={{ height }}
+      className={`w-full relative rounded-lg overflow-hidden ${className}`}
+    >
+      {hasAnyCenter && (
+        <MapContainer
+          key={`${effectiveCenter.lat}-${effectiveCenter.lng}`} // force recenter if fallback changes
+          center={[effectiveCenter.lat, effectiveCenter.lng]}
+          zoom={fallbackZoom}
+          scrollWheelZoom
+          style={{ height: "100%", width: "100%" }}
+          preferCanvas
+        >
+          <TileLayer
+            attribution='&copy; OpenStreetMap contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          <FitBounds
+            stations={markerStations}
+            center={effectiveCenter}
+            userLocation={showUserLocation ? userLocation || null : null}
+          />
+          {showUserLocation && userLocation && (
+            <Marker position={[userLocation.lat, userLocation.lng]} icon={userIcon}>
+              <Tooltip direction="top" offset={[0, -4]} opacity={0.9}>
+                You are here
+              </Tooltip>
+            </Marker>
+          )}
+          {markerStations.map((st) => {
+            const color = colorFromAvailability(st)
             return (
-              <CircleMarker
-                key={s.id}
-                center={s.position}
-                radius={10}
-                pathOptions={{
-                  color: colorBySpeed(s.speedKw),
-                  fillColor: colorBySpeed(s.speedKw),
-                  fillOpacity: 0.8,
-                  weight: 2,
+              <Marker
+                key={st.id}
+                position={[st.lat, st.lng]}
+                icon={iconFactory(color)}
+                eventHandlers={{
+                  click: () => onMarkerClick && onMarkerClick(st.id),
                 }}
               >
                 <Popup>
-                  <div className="space-y-1">
-                    <div className="font-semibold">{s.name}</div>
-                    <div className="text-xs text-gray-600 flex items-center gap-1">
-                      <MapPin className="h-3.5 w-3.5" /> {s.city}
-                    </div>
-                    <div className="text-sm">
-                      <span className="font-medium">{s.speedKw} kW</span> • {s.connectors.join(", ")}
-                    </div>
-                    <div className="text-sm">
-                      Availability: <span className="text-emerald-600 font-medium">{s.available}</span>/{s.total}
-                    </div>
-                    <div className="text-sm">Price: {s.price}</div>
-                    <div className="text-sm">Effective: {effective} kW</div>
-                    <div className="text-sm">Est. to 100%: {fmtEta(eta)}</div>
-                    <div className="text-sm flex items-center gap-1">
-                      <Star className="h-3.5 w-3.5 text-amber-400 fill-current" />
-                      {s.rating.toFixed(1)}
-                    </div>
-                    <a
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      href={`https://www.google.com/maps/dir/?api=1&destination=${(s.position as [number, number])[0]},${(s.position as [number, number])[1]}`}
-                      className="inline-flex items-center gap-1 text-emerald-700 hover:underline text-sm mt-1"
-                    >
-                      Navigate
-                    </a>
+                  <div className="space-y-1 text-sm">
+                    <div className="font-semibold">{st.name}</div>
+                    {st.network && <div className="text-gray-600">{st.network}</div>}
+                    {st.pricing && <div>{st.pricing}</div>}
+                    {typeof st.availability === "number" && (
+                      <div>
+                        Availability:{" "}
+                        <span className="font-medium text-emerald-600">
+                          {st.availability}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </Popup>
-              </CircleMarker>
+                <Tooltip direction="top" offset={[0, -10]} opacity={0.9}>
+                  {st.name}
+                </Tooltip>
+              </Marker>
             )
           })}
         </MapContainer>
-      </div>
+      )}
+
+      {!markerStations.length && (
+        <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-600">
+          {center ? "No station coordinates available" : "Waiting for location..."}
+        </div>
+      )}
     </div>
   )
 }

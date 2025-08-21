@@ -1,9 +1,11 @@
+import { ConnectorType, ConnectorStatus } from "@/app/shared/connectors"
+
 export interface Connector {
-  _id?: string // MongoDB ID for existing connectors
-  type: string
+  _id?: string
+  type: ConnectorType
   chargerLevel: string
   powerKW: number
-  status: "available" | "unavailable" | "charging" | "maintenance" | "faulted" | "offline"
+  status: ConnectorStatus
 }
 
 export interface Address {
@@ -67,18 +69,16 @@ export interface Reservation {
 }
 
 export interface Station {
-  _id?: string // MongoDB ID
+  _id?: string
   stationName: string
   network: string
-  address: Address
-  location: Location
-  operatingHours: OperatingHours
+  location: { type: "Point"; coordinates: [number, number] }
+  address?: { street?: string; city?: string; state?: string; zipCode?: string }
   connectors: Connector[]
-  pricing: Pricing
-  amenities: Amenities
-  photos?: string[]
-  ownerId: string
-  reservations?: Reservation[]
+  pricing?: any
+  amenities?: Record<string, boolean>
+  operatingHours?: Record<string, any>
+  ownerId?: string
   createdAt?: string
   updatedAt?: string
 }

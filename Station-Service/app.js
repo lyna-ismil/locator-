@@ -4,8 +4,6 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const logger = require('morgan');
 
-const stationRouter = require('./routes/stations');
-
 const app = express();
 
 // --- Middleware ---
@@ -35,7 +33,7 @@ mongoose.connect(MONGO_URI)
 
 // --- API Routes ---
 // The gateway will route requests from /stations to this service's root.
-app.use('/', stationRouter);
+app.use('/', require('./routes/stations')) // confirm this is root
 
 // --- Health & Debug Routes ---
 // Health check for the gateway (should respond at /stations/health)

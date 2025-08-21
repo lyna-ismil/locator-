@@ -1,7 +1,8 @@
 "use client"
-import { useState, useEffect } from "react"
+
+import { useState, useMemo, useEffect, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import MapTunisia from "@/components/map/tunisia-map"
+import dynamic from "next/dynamic"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -23,55 +24,106 @@ import {
   Layers,
   List,
 } from "lucide-react"
-import type { CarOwner, Station, Preferences, Connector } from "../types"
+import { CarOwner, ConnectorType } from "../types"
 
-// Integrate with backend via gateway
-const api = {
-  getStations: async (
-    location: { lat: number; lng: number },
-    connectors: string[],
-    preferences?: Preferences,
-  ): Promise<Station[]> => {
-    const params = new URLSearchParams({
-      lat: location.lat.toString(),
-      lng: location.lng.toString(),
-      connectors: connectors.join(","),
-      ...(preferences?.preferredNetworks?.length
-        ? { networks: preferences.preferredNetworks.join(",") }
-        : {}),
-      ...(preferences?.requiredAmenities?.length
-        ? { amenities: preferences.requiredAmenities.join(",") }
-        : {}),
-    })
-    const res = await fetch(`http://localhost:5000/stations/nearby?${params.toString()}`)
-    if (!res.ok) throw new Error("Failed to fetch stations")
-    return await res.json()
-  },
-  toggleFavorite: async (stationId: string, isFav: boolean) => {
-    // You may want to call your backend here
-    return { success: true }
-  },
-}
+const MapTunisia = dynamic(() => import("@/components/map/tunisia-map"), {
+  ssr: false,
+  loading: () => (
+    <div className="w-full h-full flex items-center justify-center text-sm text-gray-500">
+      Loading map...
+    </div>
+  ),
+})
 
 type ViewMode = "map" | "list"
 type SortOption = "distance" | "price" | "availability" | "rating"
 
-export default function StationDiscovery({
-  user,
-  location,
-  onSelectStation,
-  favorites,
-  setFavorites,
-}: {
+interface Props {
   user: CarOwner
-  location: { lat: number; lng: number }
+  location: { lat: number; lng: number } | null
+  stations: Station[]            // optional (fallback if provided)
   onSelectStation: (station: Station) => void
   favorites: string[]
   setFavorites: (ids: string[]) => void
-}) {
-  const [stations, setStations] = useState<Station[]>([])
-  const [filteredStations, setFilteredStations] = useState<Station[]>([])
-  const [loading, setLoading] = useState(true)
+}
+
+const MAP_HEIGHT = "calc(100vh - 220px)"
+
+/* --- Helpers inserted here --- */
+function haversine(lat1:number, lon1:number, lat2:number, lon2:number) {
+  const toRad = (v:number) => (v * Math.PI) / 180
+  const R = 6371
+  const dLat = toRad(lat2 - lat1)
+  const dLon = toRad(lon2 - lon1)
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) ** 2
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return R * c
+}
+
+function adaptBackendStation(raw: any, userLoc: {lat:number;lng:number}|null): Station {
+  const coord = raw?.location?.coordinates
+  const lng = (Array.isArray(coord) && isFinite(coord?.[0])) ? +coord[0] : undefined
+  const lat = (Array.isArray(coord) && isFinite(coord?.[1])) ? +coord[1] : undefined
+
+  const connectors = (raw.connectors || []).map((c:any, idx:number) => ({
+    id: c._id || `${raw._id}-c${idx}`,
+    type: c.type,
+    power: c.powerKW,
+    status: (c.status || "").toLowerCase(),
+  }))
+
+  const amenitiesArr:string[] = []
+  if (raw.amenities) {
+    Object.entries(raw.amenities).forEach(([k,v]) => {
+      if (v) amenitiesArr.push(k.charAt(0).toUpperCase() + k.slice(1))
+    })
+  }
+
+  let pricingDisplay = ""
+  if (raw.pricing) {
+    const parts:string[] = []
+    if (raw.pricing.perkWh) parts.push(`${raw.pricing.perkWh} /kWh`)
+    if (raw.pricing.perHour) parts.push(`${raw.pricing.perHour}/h`)
+    if (raw.pricing.sessionFee) parts.push(`Fee ${raw.pricing.sessionFee}`)
+    pricingDisplay = parts.join(" • ") || raw.pricing.notes || ""
+  }
+
+  let distance:number|undefined
+  if (userLoc && typeof lat === "number" && typeof lng === "number") {
+    distance = haversine(userLoc.lat, userLoc.lng, lat, lng)
+  }
+
+  return {
+    id: raw._id || raw.id,
+    name: raw.stationName || raw.name || "Unnamed",
+    network: raw.network || "Unknown",
+    address: `${raw.address?.street || ""} ${raw.address?.city || ""}`.trim(),
+    distance,
+    pricing: pricingDisplay,
+    availability: connectors.filter((c)=>c.status === "available").length,
+    operatingHours: "",
+    connectors,
+    amenities: amenitiesArr,
+    photos: raw.photoUrl ? [raw.photoUrl] : [],
+    location: {
+      lat: lat ?? 0,
+      lng: lng ?? 0,
+    },
+  }
+}
+/* --- End helpers --- */
+
+export default function StationDiscovery({
+  user,
+  location,
+  stations,
+  onSelectStation,
+  favorites,
+  setFavorites,
+}: Props) {
   const [searchQuery, setSearchQuery] = useState("")
   const [viewMode, setViewMode] = useState<ViewMode>("map")
   const [sortBy, setSortBy] = useState<SortOption>("distance")
@@ -84,132 +136,171 @@ export default function StationDiscovery({
     availableOnly: false,
   })
 
-  const availableNetworks = ["ChargePoint", "Tesla", "EVgo", "Electrify America", "IONITY"]
-  const availableAmenities = ["WiFi", "Coffee", "Food", "Shopping", "Restrooms", "Parking"]
+  // New backend integration state
+  const [backendStations, setBackendStations] = useState<Station[]>([])
+  const [loadingStations, setLoadingStations] = useState(false)
+  const [loadError, setLoadError] = useState<string|null>(null)
 
-  useEffect(() => {
-    async function fetchStations() {
-      setLoading(true)
-      const connectors = [user.vehicleDetails.primaryConnector, ...(user.vehicleDetails.adapters || [])]
-      try {
-        const stationsData = await api.getStations(location, connectors, user.preferences)
-        setStations(stationsData)
-      } catch (err) {
-        setStations([])
+  function normalizeConnector(t?: string): ConnectorType | string {
+    if (!t) return ""
+    const up = t.replace(/[\s_-]/g, "").toUpperCase()
+    if (up === "TYPE2" || up === "MENNEKES") return "TYPE2"
+    if (up === "TYPE1" || up === "J1772") return "TYPE1"
+    if (up.startsWith("CCS2")) return "CCS2"
+    if (up.startsWith("CCS1")) return "CCS1"
+    if (up.startsWith("CCS")) return "CCS"
+    if (up === "CHADEMO") return "CHADEMO"
+    if (up === "TESLA") return "TESLA"
+    if (up === "GBT" || up === "GB_T") return "GB_T"
+    if (up.includes("SCHUKO")) return "SCHUKO"
+    return up
+  }
+
+  // Extend fetchNearby to send driver connector preferences
+  const fetchNearby = useCallback(async () => {
+    if (!location) return
+    try {
+      setLoadingStations(true)
+      setLoadError(null)
+      const base = (process.env.NEXT_PUBLIC_STATION_SERVICE_URL || "http://localhost:5000").replace(/\/+$/,'')
+      const driverConnectors = [
+        user?.vehicle?.primaryConnector,
+        ...(user?.vehicle?.adapters || []),
+      ].filter(Boolean).join(",")
+      const radius = 10000
+      const url = `${base}/stations/nearby?lat=${location.lat}&lng=${location.lng}&radius=${radius}&connectors=${encodeURIComponent(driverConnectors)}`
+      console.debug("[fetchNearby] GET", url)
+      const res = await fetch(url, { cache: "no-store" })
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`
+        try {
+          const text = await res.text()
+          msg += `: ${text}`
+          console.error("[fetchNearby] body:", text)
+        } catch {}
+        throw new Error(msg)
       }
-      setLoading(false)
+      const data = await res.json()
+      const adapted = data
+        .map((d:any) => adaptBackendStation(d, location))
+        .filter((s:Station) => isFinite(s.location.lat) && isFinite(s.location.lng))
+      setBackendStations(adapted)
+    } catch (e:any) {
+      setLoadError(e.message || "Error loading stations")
+    } finally {
+      setLoadingStations(false)
     }
-    fetchStations()
-  }, [location, user])
+  }, [location, user?.vehicle?.primaryConnector, user?.vehicle?.adapters])
 
-  useEffect(() => {
-    let filtered = [...stations]
+  useEffect(() => { fetchNearby() }, [fetchNearby])
 
-    // Apply search filter
+  // Use provided stations if passed, else backend
+  const combinedStations = useMemo(
+    () => (stations && stations.length ? stations : backendStations),
+    [stations, backendStations]
+  )
+
+  const filteredStations = useMemo(() => {
+    if (!combinedStations.length) return []
+
+    // combinedStations already contains normalized stations
+    let filtered = [...combinedStations]
+
     if (searchQuery) {
+      const q = searchQuery.toLowerCase()
       filtered = filtered.filter(
-        (station) =>
-          station.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          station.network.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          station.address.toLowerCase().includes(searchQuery.toLowerCase()),
+        (s:any) =>
+          s.name.toLowerCase().includes(q) ||
+          s.network.toLowerCase().includes(q) ||
+          (s.address || "").toLowerCase().includes(q)
       )
     }
 
-    // Apply filters
-    if (filters.maxDistance > 0) {
-      filtered = filtered.filter((station) => (station.distance ?? 0) <= filters.maxDistance)
-    }
+    if (filters.maxDistance > 0)
+      filtered = filtered.filter((s:any) => (s.distance ?? 0) <= filters.maxDistance)
 
-    if (filters.minPower > 0) {
-      filtered = filtered.filter((station) => station.connectors.some((c: Connector) => c.power >= filters.minPower))
-    }
+    if (filters.minPower > 0)
+      filtered = filtered.filter((s:any) =>
+        s.connectors.some((c:any) => c.power >= filters.minPower)
+      )
 
-    if (filters.networks.length > 0) {
-      filtered = filtered.filter((station) => filters.networks.includes(station.network))
-    }
+    if (filters.networks.length)
+      filtered = filtered.filter((s:any) => filters.networks.includes(s.network))
 
-    if (filters.amenities.length > 0) {
-      filtered = filtered.filter((station) =>
-        filters.amenities.every((amenity) => station.amenities?.includes(amenity)),
+    if (filters.amenities.length)
+      filtered = filtered.filter((s:any) =>
+        filters.amenities.every((a) => s.amenities?.includes(a))
+      )
+
+    if (filters.availableOnly)
+      filtered = filtered.filter((s:any) => (s.availability ?? 0) > 0)
+
+    // In filteredStations memo add compatibility filter (before sorting)
+    if (user?.vehicle?.primaryConnector) {
+      const owned = new Set([
+        user.vehicle.primaryConnector,
+        ...(user.vehicle.adapters || []),
+      ].map(normalizeConnector))
+
+      filtered = filtered.filter((s:any) =>
+        s.connectors?.some((c:any) => owned.has(normalizeConnector(c.type)))
       )
     }
 
-    if (filters.availableOnly) {
-      filtered = filtered.filter((station) => station.availability > 0)
-    }
-
-    // Apply sorting
-    filtered.sort((a, b) => {
+    filtered.sort((a:any, b:any) => {
       const favA = favorites.includes(a.id) ? -1 : 0
       const favB = favorites.includes(b.id) ? -1 : 0
       if (favA !== favB) return favA - favB
-
       switch (sortBy) {
-        case "distance":
-          return (a.distance ?? 0) - (b.distance ?? 0)
+        case "distance": return (a.distance ?? 0) - (b.distance ?? 0)
         case "price":
-          return Number.parseFloat(a.pricing.split(" ")[0]) - Number.parseFloat(b.pricing.split(" ")[0])
-        case "availability":
-          return b.availability - a.availability
-        case "rating":
-          return (b.reviews?.[0]?.rating ?? 0) - (a.reviews?.[0]?.rating ?? 0)
-        default:
-          return 0
+          return (
+            parseFloat(a.pricing?.split(" ")[0] || "0") -
+            parseFloat(b.pricing?.split(" ")[0] || "0")
+          )
+        case "availability": return (b.availability ?? 0) - (a.availability ?? 0)
+        case "rating": return (b.reviews?.[0]?.rating ?? 0) - (a.reviews?.[0]?.rating ?? 0)
+        default: return 0
       }
     })
 
-    setFilteredStations(filtered)
-  }, [stations, searchQuery, filters, sortBy, favorites])
+    return filtered
+  }, [combinedStations, searchQuery, filters, sortBy, favorites, user?.vehicle?.primaryConnector, user?.vehicle?.adapters])
 
   function toggleFavorite(stationId: string) {
-    const isFav = favorites.includes(stationId)
-    api.toggleFavorite(stationId, !isFav)
-    setFavorites(isFav ? favorites.filter((id) => id !== stationId) : [...favorites, stationId])
+    setFavorites(
+      favorites.includes(stationId)
+        ? favorites.filter((id) => id !== stationId)
+        : [...favorites, stationId],
+    )
   }
 
   const getAmenityIcon = (amenity: string) => {
     switch (amenity.toLowerCase()) {
-      case "wifi":
-        return <Wifi className="w-4 h-4" />
-      case "coffee":
-        return <Coffee className="w-4 h-4" />
-      case "food":
-        return <Utensils className="w-4 h-4" />
-      case "shopping":
-        return <ShoppingBag className="w-4 h-4" />
-      default:
-        return <div className="w-4 h-4 bg-gray-300 rounded-full" />
+      case "wifi": return <Wifi className="w-4 h-4" />
+      case "coffee": return <Coffee className="w-4 h-4" />
+      case "food": return <Utensils className="w-4 h-4" />
+      case "shopping": return <ShoppingBag className="w-4 h-4" />
+      default: return <div className="w-4 h-4 bg-gray-300 rounded-full" />
     }
   }
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "available":
-        return "bg-emerald-500"
-      case "busy":
-        return "bg-yellow-500"
-      case "offline":
-        return "bg-red-500"
-      default:
-        return "bg-gray-500"
+      case "available": return "bg-emerald-500"
+      case "busy": return "bg-yellow-500"
+      case "offline": return "bg-red-500"
+      default: return "bg-gray-500"
     }
   }
 
   const StationCard = ({ station }: { station: Station }) => (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      whileHover={{ y: -2 }}
-      transition={{ duration: 0.2 }}
-    >
+    <motion.div layout initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }} transition={{ duration: 0.2 }}>
       <Card
-        className="cursor-pointer hover:shadow-lg transition-all duration-300 border-gray-200 hover:border-emerald-300 overflow-hidden"
+        className="cursor-pointer hover:shadow-lg transition-all border-gray-200 hover:border-emerald-300 overflow-hidden"
         onClick={() => onSelectStation(station)}
       >
         <CardContent className="p-0">
-          {/* Station Image */}
           <div className="relative h-32 bg-gradient-to-br from-emerald-100 to-lime-100">
             <img
               src={station.photos?.[0] || "/placeholder.svg?height=128&width=400&query=charging station"}
@@ -217,7 +308,9 @@ export default function StationDiscovery({
               className="w-full h-full object-cover"
             />
             <div className="absolute top-2 right-2 flex gap-2">
-              <Badge className="bg-white/90 text-gray-700 text-xs">{station.distance?.toFixed(1)} km</Badge>
+              <Badge className="bg-white/90 text-gray-700 text-xs">
+                {station.distance?.toFixed(1)} km
+              </Badge>
               <Button
                 variant="ghost"
                 size="sm"
@@ -235,32 +328,18 @@ export default function StationDiscovery({
               </Button>
             </div>
           </div>
-
           <div className="p-4">
-            {/* Header */}
             <div className="flex items-start justify-between mb-3">
               <div className="flex-1">
                 <h4 className="font-semibold text-gray-900 text-lg mb-1">{station.name}</h4>
                 <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <Badge variant="outline" className="text-xs">
-                    {station.network}
-                  </Badge>
-                  {station.reviews?.[0] && (
-                    <div className="flex items-center gap-1">
-                      <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                      <span className="text-xs">{station.reviews[0].rating}</span>
-                      <span className="text-xs text-gray-400">({station.reviews[0].count})</span>
-                    </div>
-                  )}
+                  <Badge variant="outline" className="text-xs">{station.network}</Badge>
                 </div>
               </div>
               <div className="text-right">
                 <div className="text-sm font-medium text-emerald-600">{station.pricing}</div>
-                <div className="text-xs text-gray-500">{station.operatingHours}</div>
               </div>
             </div>
-
-            {/* Connectors */}
             <div className="flex flex-wrap gap-2 mb-3">
               {station.connectors.map((connector: Connector) => (
                 <div key={connector.id} className="flex items-center gap-2 px-2 py-1 bg-gray-50 rounded-lg text-xs">
@@ -270,15 +349,10 @@ export default function StationDiscovery({
                 </div>
               ))}
             </div>
-
-            {/* Amenities */}
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 {station.amenities?.slice(0, 4).map((amenity) => (
-                  <div
-                    key={amenity}
-                    className="flex items-center gap-1 px-2 py-1 bg-emerald-50 rounded-full text-xs text-emerald-700"
-                  >
+                  <div key={amenity} className="flex items-center gap-1 px-2 py-1 bg-emerald-50 rounded-full text-xs text-emerald-700">
                     {getAmenityIcon(amenity)}
                     <span>{amenity}</span>
                   </div>
@@ -291,7 +365,9 @@ export default function StationDiscovery({
               </div>
               <div className="flex items-center gap-1 text-sm">
                 <div className="w-2 h-2 bg-emerald-500 rounded-full" />
-                <span className="text-emerald-600 font-medium">{station.availability} available</span>
+                <span className="text-emerald-600 font-medium">
+                  {station.availability} available
+                </span>
               </div>
             </div>
           </div>
@@ -300,22 +376,49 @@ export default function StationDiscovery({
     </motion.div>
   )
 
+  const renderMap = () => {
+    if (!location) {
+      return (
+        <div className="flex items-center justify-center h-full text-gray-500 text-sm">
+          Detecting your location...
+        </div>
+      )
+    }
+    return (
+      <MapTunisia
+        center={location}
+        stations={filteredStations}   // already normalized: location:{lat,lng}
+        height={MAP_HEIGHT}
+        onMarkerClick={(id: string) => {
+          const st = filteredStations.find((s) => s.id === id)
+          if (st) onSelectStation(st)
+        }}
+      />
+    )
+  }
+
+  const availableNetworks = ["ChargePoint", "Tesla", "EVgo", "IONITY"]
+
   return (
     <div className="flex flex-col h-full bg-gray-50">
-      {/* Header with Search and Controls */}
+      {/* Header */}
       <div className="bg-white border-b border-gray-200 p-4 space-y-4">
-        {/* Search Bar */}
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-          <Input
-            placeholder="Search stations, networks, or locations..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10 h-12 border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
-          />
+            <Input
+              placeholder="Search stations, networks, or locations..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10 h-12 border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
+            />
         </div>
+        {loadingStations && (
+          <div className="text-xs text-gray-500">Loading nearby stations...</div>
+        )}
+        {loadError && (
+          <div className="text-xs text-red-600">Failed to load stations: {loadError}</div>
+        )}
 
-        {/* Controls */}
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <Button
@@ -328,9 +431,9 @@ export default function StationDiscovery({
               Filters
               {showFilters ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </Button>
-            <Select value={sortBy} onValueChange={(value: SortOption) => setSortBy(value)}>
+            <Select value={sortBy} onValueChange={(v: SortOption) => setSortBy(v)}>
               <SelectTrigger className="w-40">
-                <SelectValue />
+                <SelectValue placeholder="Sort by" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="distance">Distance</SelectItem>
@@ -366,7 +469,6 @@ export default function StationDiscovery({
           </div>
         </div>
 
-        {/* Filters Panel */}
         <AnimatePresence>
           {showFilters && (
             <motion.div
@@ -381,7 +483,9 @@ export default function StationDiscovery({
                   <Input
                     type="number"
                     value={filters.maxDistance}
-                    onChange={(e) => setFilters({ ...filters, maxDistance: Number(e.target.value) })}
+                    onChange={(e) =>
+                      setFilters({ ...filters, maxDistance: Number(e.target.value) })
+                    }
                     className="h-10"
                   />
                 </div>
@@ -390,7 +494,9 @@ export default function StationDiscovery({
                   <Input
                     type="number"
                     value={filters.minPower}
-                    onChange={(e) => setFilters({ ...filters, minPower: Number(e.target.value) })}
+                    onChange={(e) =>
+                      setFilters({ ...filters, minPower: Number(e.target.value) })
+                    }
                     className="h-10"
                   />
                 </div>
@@ -398,7 +504,9 @@ export default function StationDiscovery({
                   <Label className="text-sm font-medium">Networks</Label>
                   <Select
                     value={filters.networks.join(",")}
-                    onValueChange={(value) => setFilters({ ...filters, networks: value ? value.split(",") : [] })}
+                    onValueChange={(value) =>
+                      setFilters({ ...filters, networks: value ? value.split(",") : [] })
+                    }
                   >
                     <SelectTrigger className="h-10">
                       <SelectValue placeholder="All networks" />
@@ -422,10 +530,13 @@ export default function StationDiscovery({
       <div className="flex-1 relative">
         {viewMode === "map" ? (
           <>
-            <MapTunisia center={location} stations={filteredStations} onMarkerClick={onSelectStation} />
-            {/* Floating Station List */}
-            <div className="absolute bottom-4 left-4 right-4 max-h-64 overflow-hidden">
-              <Card className="bg-white/95 backdrop-blur-sm border-0 shadow-xl">
+            <div className="absolute inset-0">
+              <div style={{ height: MAP_HEIGHT }} className="w-full">
+                {renderMap()}
+              </div>
+            </div>
+            <div className="absolute bottom-4 left-4 right-4 max-h-64 overflow-hidden pointer-events-none">
+              <Card className="bg-white/95 backdrop-blur-sm border-0 shadow-xl pointer-events-auto">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-lg font-bold text-gray-800 flex items-center gap-2">
                     <MapPin className="w-5 h-5 text-emerald-600" />
@@ -433,14 +544,13 @@ export default function StationDiscovery({
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="max-h-48 overflow-y-auto">
-                  {loading ? (
-                    <div className="flex items-center justify-center py-8">
-                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600"></div>
-                      <span className="ml-3 text-gray-600">Finding stations...</span>
+                  {filteredStations.length === 0 ? (
+                    <div className="py-6 text-sm text-gray-500 text-center">
+                      No stations match your filters.
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      {filteredStations.slice(0, 3).map((station) => (
+                      {filteredStations.slice(0, 4).map((station) => (
                         <div
                           key={station.id}
                           className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-100 cursor-pointer hover:border-emerald-300 transition-colors"
@@ -454,20 +564,26 @@ export default function StationDiscovery({
                           </div>
                           <div className="flex items-center gap-2">
                             <Badge className="bg-emerald-100 text-emerald-700 text-xs">
-                              {station.availability} available
+                              {station.availability} avail
                             </Badge>
                             <Button
                               variant="ghost"
                               size="sm"
                               className={`h-8 w-8 p-0 ${
-                                favorites.includes(station.id) ? "text-yellow-500" : "text-gray-400"
+                                favorites.includes(station.id)
+                                  ? "text-yellow-500"
+                                  : "text-gray-400"
                               }`}
                               onClick={(e) => {
                                 e.stopPropagation()
                                 toggleFavorite(station.id)
                               }}
                             >
-                              <Heart className={`w-4 h-4 ${favorites.includes(station.id) ? "fill-current" : ""}`} />
+                              <Heart
+                                className={`w-4 h-4 ${
+                                  favorites.includes(station.id) ? "fill-current" : ""
+                                }`}
+                              />
                             </Button>
                           </div>
                         </div>
@@ -480,10 +596,9 @@ export default function StationDiscovery({
           </>
         ) : (
           <div className="p-4 overflow-y-auto h-full">
-            {loading ? (
-              <div className="flex items-center justify-center py-16">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600"></div>
-                <span className="ml-4 text-lg text-gray-600">Finding stations...</span>
+            {filteredStations.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-gray-500">
+                <div className="text-sm">No stations match your filters.</div>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,8 +10,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
-import { Plus, X, Upload, MapPin, Clock, Zap, DollarSign, Camera, CheckCircle } from "lucide-react"
+import { Plus, X, Upload, MapPin, Clock, Zap, DollarSign, Camera, CheckCircle, Wifi, Coffee, ShoppingBag, ParkingSquare, Utensils, BadgeCheck } from "lucide-react"
 import type { Connector } from "../types"
+import { CONNECTOR_TYPES, CONNECTOR_STATUSES } from "@/app/shared/connectors"
+
+const STATION_API_BASE =
+  (process.env.NEXT_PUBLIC_STATION_SERVICE_URL || "http://localhost:5000").replace(/\/+$/,"")
 
 type OperatingHours = {
   [day: string]: {
@@ -35,7 +39,7 @@ type Pricing = {
 }
 
 interface AddStationModalProps {
-  onStationAdded: () => void
+  onStationAdded: (station?: any) => void
   open?: boolean
   setOpen?: (open: boolean) => void
   startStep?: number
@@ -50,6 +54,8 @@ export function AddStationModal({
   const [open, setOpen] = useState(controlledOpen ?? false)
   const [currentStep, setCurrentStep] = useState(startStep)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [errorMsg, setErrorMsg] = useState("")
+  const [successMsg, setSuccessMsg] = useState("")
 
   // Sync controlled open/step
   useEffect(() => {
@@ -78,6 +84,7 @@ export function AddStationModal({
     pricing: {
       model: "per_kwh",
       perKwh: 0,
+      perHour: 0,          // added (was missing)
       sessionFee: 0,
       hasPeakHours: false,
     } as Pricing,
@@ -85,69 +92,141 @@ export function AddStationModal({
     photos: [] as string[],
   })
 
+  const [newConnector, setNewConnector] = useState({
+    type: "CCS",
+    chargerLevel: "",
+    powerKW: 0,
+    status: "Available",
+  })
+
   const availableAmenities = [
-    { id: "wifi", name: "Wi-Fi", icon: "📶" },
-    { id: "restrooms", name: "Restrooms", icon: "🚻" },
-    { id: "food", name: "Food", icon: "🍕" },
-    { id: "shopping", name: "Shopping", icon: "🛍️" },
-    { id: "parking", name: "Free Parking", icon: "🅿️" },
-    { id: "coffee", name: "Coffee Shop", icon: "☕" },
+    { id: "wifi", name: "Wi-Fi", icon: <Wifi className="h-5 w-5 text-emerald-600" /> },
+    { id: "restrooms", name: "Restrooms", icon: <BadgeCheck className="h-5 w-5 text-emerald-600" /> },
+    { id: "food", name: "Food", icon: <Utensils className="h-5 w-5 text-emerald-600" /> },
+    { id: "shopping", name: "Shopping", icon: <ShoppingBag className="h-5 w-5 text-emerald-600" /> },
+    { id: "parking", name: "Free Parking", icon: <ParkingSquare className="h-5 w-5 text-emerald-600" /> }, // if invalid, change to <SquareParking ... />
+    { id: "coffee", name: "Coffee Shop", icon: <Coffee className="h-5 w-5 text-emerald-600" /> },
   ]
 
   const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
+  // Helper: simple required check
+  const isStep1Valid = formData.name.trim() && formData.address.street.trim()
+  const hasCoords = formData.coordinates.latitude !== 0 && formData.coordinates.longitude !== 0
+  const hasConnectors = formData.connectors.length > 0
+
+  // Optional geolocation fill
+  const fillWithBrowserLocation = useCallback(() => {
+    if (!navigator.geolocation) return
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        setFormData(prev => ({
+          ...prev,
+          coordinates: {
+            latitude: +pos.coords.latitude.toFixed(6),
+              longitude: +pos.coords.longitude.toFixed(6),
+          },
+        }))
+      },
+      () => {},
+      { enableHighAccuracy: true, timeout: 8000 }
+    )
+  }, [])
+
+  // -------------------------------- handleSubmit (POST new station) -------------------------------
   const handleSubmit = async () => {
     setIsSubmitting(true)
+    setErrorMsg("")
+    setSuccessMsg("")
     try {
-      // Prepare data to match your backend Station model
+      if (!isStep1Valid) throw new Error("Name and street are required.")
+      if (!hasCoords) throw new Error("Latitude & longitude required.")
+      if (!hasConnectors) throw new Error("Add at least one connector.")
+
+      const ownerId =
+        (typeof window !== "undefined" && localStorage.getItem("ownerId")) || undefined
+
+      // Build operating hours object
+      const operatingHours: Record<string, any> = {}
+      Object.entries(formData.operatingHours).forEach(([day, cfg]) => {
+        if (!cfg) return
+        operatingHours[day] = {
+          isOpen: !!cfg.isOpen,
+          is24Hours: !!cfg.is24Hours,
+          openTime: cfg.is24Hours ? "00:00" : (cfg.openTime || "09:00"),
+          closeTime: cfg.is24Hours ? "23:59" : (cfg.closeTime || "18:00"),
+        }
+      })
+
+      // Construct payload matching backend Station model
       const payload = {
-        stationName: formData.name,
-        network: formData.networkName,
+        ownerId,
+        stationName: formData.name.trim(),
+        network: formData.networkName.trim() || "Independent",
         location: {
           type: "Point",
-          coordinates: [Number(formData.coordinates.longitude), Number(formData.coordinates.latitude)],
+          coordinates: [
+            Number(formData.coordinates.longitude),
+            Number(formData.coordinates.latitude),
+          ],
         },
         address: {
-          street: formData.address.street,
-          city: formData.address.city,
-          state: formData.address.state,
-          zipCode: formData.address.zipCode,
+            street: formData.address.street,
+            city: formData.address.city,
+            state: formData.address.state,
+            zipCode: formData.address.zipCode,
         },
-        operatingHours: "24/7", // Or map your formData.operatingHours as needed
-        connectors: formData.connectors.map((c) => ({
+        operatingHours,
+        connectors: formData.connectors.map(c => ({
           type: c.type,
-          chargerLevel: c.chargerLevel, // Use chargerLevel only, since 'level' does not exist
+          chargerLevel: c.chargerLevel,
           powerKW: c.powerKW,
+          status: c.status || "Available",
         })),
         pricing: {
-          perHour: formData.pricing.perHour || 0,
           perkWh: formData.pricing.perKwh || 0,
+          perHour: formData.pricing.perHour || 0,
           sessionFee: formData.pricing.sessionFee || 0,
           notes: formData.pricing.notes || "",
+          peak: formData.pricing.hasPeakHours
+            ? {
+                start: formData.pricing.peakStartTime || "17:00",
+                end: formData.pricing.peakEndTime || "20:00",
+                surcharge: formData.pricing.peakSurcharge || 0,
+              }
+            : undefined,
         },
         amenities: {
           wifi: formData.amenities.includes("wifi"),
           restrooms: formData.amenities.includes("restrooms"),
           food: formData.amenities.includes("food"),
           shopping: formData.amenities.includes("shopping"),
+          coffee: formData.amenities.includes("coffee"),
+          parking: formData.amenities.includes("parking"),
         },
-        // Add other fields as needed
+        photos: formData.photos,
       }
 
-      // Send POST request to backend
-      const response = await fetch("http://localhost:5000/stations", {
+      // POST new station
+      const res = await fetch(`${STATION_API_BASE}/stations`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-owner-id": ownerId || "",
+        },
         body: JSON.stringify(payload),
       })
-
-      if (!response.ok) {
-        throw new Error("Failed to add station.")
+      if (!res.ok) {
+        const txt = await res.text()
+        throw new Error(`Create failed (${res.status}) ${txt}`)
       }
+      const created = await res.json()
 
-      onStationAdded()
+      setSuccessMsg("Station created.")
+      onStationAdded(created)
       setOpen(false)
       setCurrentStep(1)
+
       // Reset form
       setFormData({
         name: "",
@@ -156,29 +235,38 @@ export function AddStationModal({
         coordinates: { latitude: 0, longitude: 0 },
         operatingHours: {},
         connectors: [],
-        pricing: { model: "per_kwh", perKwh: 0, sessionFee: 0, hasPeakHours: false },
+        pricing: {
+          model: "per_kwh",
+          perKwh: 0,
+          perHour: 0,
+          sessionFee: 0,
+          hasPeakHours: false,
+        },
         amenities: [],
         photos: [],
       })
-    } catch (error) {
-      console.error("Failed to add station:", error)
+    } catch (e:any) {
+      setErrorMsg(e.message || "Failed to add station.")
     } finally {
       setIsSubmitting(false)
     }
   }
+  // -------------------------------- end handleSubmit --------------------------------
 
   const addConnector = () => {
-    const newConnector: Connector = {
-      _id: `connector-${Date.now()}`,
-      type: "Type 2",
-      chargerLevel: "Level 2",
-      powerKW: 22,
-      status: "Available",
-    }
-    setFormData((prev) => ({
+    setFormData(prev => ({
       ...prev,
-      connectors: [...prev.connectors, newConnector],
+      connectors: [
+        ...prev.connectors,
+        {
+          type: newConnector.type,
+          chargerLevel: newConnector.chargerLevel.trim(),
+          powerKW: newConnector.powerKW,
+          status: newConnector.status,
+        },
+      ],
     }))
+    setNewConnector({ type: "CCS", chargerLevel: "", powerKW: 0, status: "Available" })
   }
 
   const removeConnector = (index: number) => {
@@ -197,7 +285,7 @@ export function AddStationModal({
     }))
   }
 
-  const renderStep = () => {
+  const StepContent = () => {
     switch (currentStep) {
       case 1:
         return (
@@ -353,6 +441,18 @@ export function AddStationModal({
                   />
                 </div>
               </div>
+
+              <div className="flex justify-end -mt-2 mb-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={fillWithBrowserLocation}
+                  className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                >
+                  Use My Location
+                </Button>
+              </div>
             </div>
           </div>
         )
@@ -376,6 +476,8 @@ export function AddStationModal({
                   <CardContent className="p-4">
                     <div className="flex items-center space-x-4">
                       <div className="w-24 capitalize font-medium text-gray-700">{day}</div>
+
+                      {/* Open / Closed toggle */}
                       <Switch
                         checked={formData.operatingHours[day]?.isOpen || false}
                         onCheckedChange={(checked) => {
@@ -384,7 +486,9 @@ export function AddStationModal({
                             operatingHours: {
                               ...prev.operatingHours,
                               [day]: {
+                                ...(prev.operatingHours[day] || {}),
                                 isOpen: checked,
+                                // reset defaults when turning on
                                 is24Hours: false,
                                 openTime: "09:00",
                                 closeTime: "18:00",
@@ -394,8 +498,10 @@ export function AddStationModal({
                         }}
                         className="data-[state=checked]:bg-emerald-600"
                       />
+
                       {formData.operatingHours[day]?.isOpen && (
                         <>
+                          {/* 24h toggle */}
                           <Switch
                             checked={formData.operatingHours[day]?.is24Hours || false}
                             onCheckedChange={(checked) => {
@@ -404,7 +510,8 @@ export function AddStationModal({
                                 operatingHours: {
                                   ...prev.operatingHours,
                                   [day]: {
-                                    ...prev.operatingHours[day],
+                                    ...(prev.operatingHours[day] || {}),
+                                    isOpen: true,
                                     is24Hours: checked,
                                   },
                                 },
@@ -413,19 +520,22 @@ export function AddStationModal({
                             className="data-[state=checked]:bg-emerald-600"
                           />
                           <span className="text-sm font-medium text-gray-600">24/7</span>
+
                           {!formData.operatingHours[day]?.is24Hours && (
                             <div className="flex items-center space-x-2">
                               <Input
                                 type="time"
                                 value={formData.operatingHours[day]?.openTime || "09:00"}
                                 onChange={(e) => {
+                                  const val = e.target.value
                                   setFormData((prev) => ({
                                     ...prev,
                                     operatingHours: {
                                       ...prev.operatingHours,
                                       [day]: {
-                                        ...prev.operatingHours[day],
-                                        openTime: e.target.value,
+                                        ...(prev.operatingHours[day] || {}),
+                                        isOpen: true,
+                                        openTime: val,
                                       },
                                     },
                                   }))
@@ -437,13 +547,15 @@ export function AddStationModal({
                                 type="time"
                                 value={formData.operatingHours[day]?.closeTime || "18:00"}
                                 onChange={(e) => {
+                                  const val = e.target.value
                                   setFormData((prev) => ({
                                     ...prev,
                                     operatingHours: {
                                       ...prev.operatingHours,
                                       [day]: {
-                                        ...prev.operatingHours[day],
-                                        closeTime: e.target.value,
+                                        ...(prev.operatingHours[day] || {}),
+                                        isOpen: true,
+                                        closeTime: val,
                                       },
                                     },
                                   }))
@@ -576,6 +688,85 @@ export function AddStationModal({
                   <p className="text-sm text-gray-500 mt-1">Click "Add Connector" to get started</p>
                 </div>
               )}
+            </div>
+
+            <div className="space-y-3 border rounded-lg p-4">
+              <h4 className="text-sm font-medium text-gray-700">Add Connector</h4>
+              <div className="grid md:grid-cols-4 gap-3">
+                <select
+                  className="input col-span-2"
+                  value={newConnector.type}
+                  onChange={e => setNewConnector(c => ({ ...c, type: e.target.value }))}
+                >
+                  {CONNECTOR_TYPES.map(t => <option key={t}>{t}</option>)}
+                </select>
+                <input
+                  className="input"
+                  placeholder="Charger Level (e.g. AC Level 2)"
+                  value={newConnector.chargerLevel}
+                  onChange={e => setNewConnector(c => ({ ...c, chargerLevel: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  className="input"
+                  placeholder="kW"
+                  value={newConnector.powerKW || ""}
+                  onChange={e => setNewConnector(c => ({ ...c, powerKW: +e.target.value }))}
+                  min={1}
+                />
+                <select
+                  className="input"
+                  value={newConnector.status}
+                  onChange={e => setNewConnector(c => ({ ...c, status: e.target.value }))}
+                >
+                  {CONNECTOR_STATUSES.map(s => <option key={s}>{s}</option>)}
+                </select>
+                <button
+                  type="button"
+                  className="col-span-2 bg-emerald-600 text-white text-sm rounded px-3 py-2 disabled:opacity-50"
+                  disabled={
+                    !newConnector.chargerLevel.trim() ||
+                    !newConnector.powerKW ||
+                    newConnector.powerKW <= 0
+                  }
+                  onClick={() => {
+                    setFormData(prev => ({
+                      ...prev,
+                      connectors: [
+                        ...prev.connectors,
+                        {
+                          type: newConnector.type,
+                          chargerLevel: newConnector.chargerLevel.trim(),
+                          powerKW: newConnector.powerKW,
+                          status: newConnector.status,
+                        },
+                      ],
+                    }))
+                    setNewConnector({ type: "CCS", chargerLevel: "", powerKW: 0, status: "Available" })
+                  }}
+                >
+                  Add Connector
+                </button>
+              </div>
+              <div className="space-y-2">
+                {formData.connectors.map((c:any, i:number) => (
+                  <div key={`${c.type}-${i}`} className="flex items-center justify-between text-xs bg-gray-50 px-3 py-2 rounded">
+                    <span>{c.type} • {c.chargerLevel} • {c.powerKW}kW • {c.status}</span>
+                    <button
+                      type="button"
+                      className="text-red-500 hover:underline"
+                      onClick={() =>
+                        setFormData(p => ({
+                          ...p,
+                          connectors: p.connectors.filter((_:any, idx:number) => idx !== i),
+                        }))
+                      }
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )
@@ -889,7 +1080,16 @@ export function AddStationModal({
             ))}
           </div>
 
-          <div className="px-6">{renderStep()}</div>
+          <div className="px-6">
+            <StepContent />
+          </div>
+
+          {(errorMsg || successMsg) && (
+            <div className="px-6 -mt-4">
+              {errorMsg && <div className="text-sm py-2 px-3 rounded bg-red-50 text-red-600 border border-red-200">{errorMsg}</div>}
+              {successMsg && <div className="text-sm py-2 px-3 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">{successMsg}</div>}
+            </div>
+          )}
 
           <div className="flex justify-between pt-6 px-6 border-t border-gray-200">
             <Button
@@ -905,8 +1105,8 @@ export function AddStationModal({
               <Button
                 onClick={() => setCurrentStep((prev) => Math.min(5, prev + 1))}
                 disabled={
-                  (currentStep === 1 && (!formData.name || !formData.address.street)) ||
-                  (currentStep === 3 && formData.connectors.length === 0)
+                  (currentStep === 1 && (!isStep1Valid || !hasCoords)) ||
+                  (currentStep === 3 && !hasConnectors)
                 }
                 className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white"
               >
@@ -918,7 +1118,7 @@ export function AddStationModal({
                 disabled={isSubmitting}
                 className="px-8 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
               >
-                {isSubmitting ? "Creating Station..." : "Create Station"}
+                {isSubmitting ? "Creating..." : "Create Station"}
               </Button>
             )}
           </div>

@@ -1,37 +1,41 @@
-export type VehicleDetails = {
+import { CONNECTOR_TYPES, ConnectorType } from "@/app/shared/connectors"
+
+// Ensure VehicleDetails has id
+export interface VehicleDetails {
+  id?: string
   make: string
   model: string
   year?: number
-  primaryConnector: string
-  maxChargingSpeed?: number
-  adapters?: string[]
-  batteryCapacity?: number
+  batteryCapacityKWh?: number
+  primaryConnector: ConnectorType
+  adapters: ConnectorType[]
+  maxAcPowerKw?: number
+  maxDcPowerKw?: number
+  rangeKm?: number
 }
 
-export type Preferences = {
-  preferredNetworks?: string[]
-  requiredAmenities?: string[]
-}
-
-export type CarOwner = {
+// Extend CarOwner / Driver profile if not already
+export interface CarOwner {
   id: string
-  fullName: string
   email: string
-  password?: string
-  vehicleDetails: VehicleDetails
-  favoriteStations?: string[]
+  name?: string
+  vehicle?: VehicleDetails
+  favorites?: string[]
   chargingHistory?: Reservation[]
   paymentMethods?: string[]
   preferences?: Preferences
 }
 
+// Replace old Connector type (string) with enum-based:
 export type Connector = {
   id: string
-  type: string
+  type: ConnectorType
   power: number
   status: "available" | "busy" | "offline"
 }
 
+// Ensure any Station interface uses: connectors: Connector[]
+// (Adjust any creation sites to cast/map to ConnectorType if needed)
 export type Review = {
   user: string
   rating: number

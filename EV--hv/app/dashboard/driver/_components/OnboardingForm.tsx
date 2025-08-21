@@ -1,5 +1,5 @@
 "use client"
-import React, { useState } from "react"
+import React, { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Car,
@@ -9,8 +9,6 @@ import {
   ChevronRight,
   ChevronLeft,
   Check,
-  Eye,
-  EyeOff,
   Sparkles,
 } from "lucide-react"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
@@ -19,7 +17,13 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
+import { CONNECTOR_TYPES, ConnectorType } from "@/app/shared/connectors"
 import type { CarOwner } from "../types"
+
+type Props = {
+  initialData?: CarOwner
+  onComplete: (data: CarOwner) => void
+}
 
 const api = {
   updateProfile: async (id: string, form: Partial<CarOwner>) => {
@@ -62,32 +66,71 @@ const popularBrands = [
   "Chevrolet",
 ]
 
-export default function OnboardingForm({ onComplete }: { onComplete: (data: CarOwner) => void }) {
-  const [currentStep, setCurrentStep] = useState(0)
-  const [isLoading, setIsLoading] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
-  const [form, setForm] = useState<Omit<CarOwner, "id">>({
-    fullName: "",
-    email: "",
-    password: "",
-    vehicleDetails: {
+function normalize(raw: any): CarOwner | null {
+  if (!raw) return null
+  const u = raw.user || raw
+  const id = u.id || u._id
+  return {
+    id,
+    fullName: u.fullName || "",
+    email: u.email || "",
+    vehicleDetails: u.vehicleDetails || u.vehicle || {
       make: "",
       model: "",
-      year: undefined,
+      year: u.vehicleDetails?.year,
       primaryConnector: "",
-      maxChargingSpeed: undefined,
-      adapters: [],
+      maxChargingSpeed: u.vehicleDetails?.maxChargingSpeed,
+      adapters: u.vehicleDetails?.adapters || [],
+    },
+    preferences: u.preferences || { preferredNetworks: [], requiredAmenities: [] },
+  }
+}
+
+export default function OnboardingForm({ initialData, onComplete }: Props) {
+  const [currentStep, setCurrentStep] = useState(0)
+  const [isLoading, setIsLoading] = useState(false)
+  const [form, setForm] = useState({
+    fullName: initialData?.fullName || "",
+    email: initialData?.email || "",
+    vehicleDetails: {
+      id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : "veh_" + Math.random().toString(36).slice(2,10),
+      make: "",
+      model: "",
+      year: "",
+      batteryCapacityKWh: "",
+      primaryConnector: "CCS" as ConnectorType,
+      adapters: [] as ConnectorType[],
     },
     preferences: {
-      preferredNetworks: [],
-      requiredAmenities: [],
+      preferredNetworks: initialData?.preferences?.preferredNetworks || [],
+      requiredAmenities: initialData?.preferences?.requiredAmenities || [],
     },
   })
   const [error, setError] = useState<string | null>(null)
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
 
+  // If initialData changes after mount (unlikely) sync it.
+  useEffect(() => {
+    if (initialData) {
+      setForm((prev) => ({
+        ...prev,
+        fullName: initialData.fullName || prev.fullName,
+        email: initialData.email || prev.email,
+        vehicleDetails: {
+          ...prev.vehicleDetails,
+          ...initialData.vehicleDetails,
+          adapters: initialData.vehicleDetails?.adapters || [],
+        },
+        preferences: {
+          preferredNetworks: initialData.preferences?.preferredNetworks || [],
+          requiredAmenities: initialData.preferences?.requiredAmenities || [],
+        },
+      }))
+    }
+  }, [initialData])
+
   const steps = [
-    { title: "Personal Info", icon: User, description: "Tell us about yourself" },
+    { title: "Personal Info", icon: User, description: "Confirm your details" },
     { title: "Vehicle Details", icon: Car, description: "Your electric vehicle" },
     { title: "Preferences", icon: Settings, description: "Customize your experience" },
     { title: "Complete", icon: Sparkles, description: "You're all set!" },
@@ -95,16 +138,12 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
 
   const validateField = (name: string, value: any) => {
     const errors: Record<string, string> = {}
-
     switch (name) {
       case "fullName":
         if (!value || value.length < 2) errors.fullName = "Name must be at least 2 characters"
         break
       case "email":
         if (!value || !/\S+@\S+\.\S+/.test(value)) errors.email = "Please enter a valid email"
-        break
-      case "password":
-        if (!value || value.length < 6) errors.password = "Password must be at least 6 characters"
         break
       case "vehicleDetails.make":
         if (!value) errors["vehicleDetails.make"] = "Vehicle make is required"
@@ -116,36 +155,38 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
         if (!value) errors["vehicleDetails.primaryConnector"] = "Primary connector is required"
         break
     }
-
     setValidationErrors((prev) => ({ ...prev, ...errors }))
     return Object.keys(errors).length === 0
   }
 
-  function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
+  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const { name, value } = e.target
-
     if (name.startsWith("vehicleDetails.")) {
       const field = name.split(".")[1]
       setForm((prev) => ({
         ...prev,
         vehicleDetails: {
           ...prev.vehicleDetails,
-          [field]: field === "year" || field === "maxChargingSpeed" ? (value ? Number(value) : undefined) : value,
+            [field]:
+              field === "year" || field === "maxChargingSpeed"
+                ? value
+                  ? Number(value)
+                  : undefined
+                : value,
         },
       }))
     } else if (name.startsWith("preferences.")) {
+      const key = name.split(".")[1]
       setForm((prev) => ({
         ...prev,
         preferences: {
           ...prev.preferences,
-          [name.split(".")[1]]: value.split(",").map((v) => v.trim()),
+          [key]: value.split(",").map((v) => v.trim()).filter(Boolean),
         },
       }))
     } else {
       setForm((prev) => ({ ...prev, [name]: value }))
     }
-
-    // Real-time validation
     validateField(name, value)
     setError(null)
   }
@@ -153,10 +194,7 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
   const handleConnectorSelect = (connectorId: string) => {
     setForm((prev) => ({
       ...prev,
-      vehicleDetails: {
-        ...prev.vehicleDetails,
-        primaryConnector: connectorId,
-      },
+      vehicleDetails: { ...prev.vehicleDetails, primaryConnector: connectorId },
     }))
     validateField("vehicleDetails.primaryConnector", connectorId)
   }
@@ -164,10 +202,7 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
   const handleBrandSelect = (brand: string) => {
     setForm((prev) => ({
       ...prev,
-      vehicleDetails: {
-        ...prev.vehicleDetails,
-        make: brand,
-      },
+      vehicleDetails: { ...prev.vehicleDetails, make: brand },
     }))
     validateField("vehicleDetails.make", brand)
   }
@@ -178,10 +213,8 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
         return (
           form.fullName &&
           form.email &&
-          form.password &&
           !validationErrors.fullName &&
-          !validationErrors.email &&
-          !validationErrors.password
+          !validationErrors.email
         )
       case 1:
         return (
@@ -189,11 +222,11 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
           form.vehicleDetails.model &&
           form.vehicleDetails.primaryConnector &&
           !validationErrors["vehicleDetails.make"] &&
-          !validationErrors["vehicleDetails.model"] &&
-          !validationErrors["vehicleDetails.primaryConnector"]
+            !validationErrors["vehicleDetails.model"] &&
+            !validationErrors["vehicleDetails.primaryConnector"]
         )
       case 2:
-        return true // Preferences are optional
+        return true
       default:
         return false
     }
@@ -201,34 +234,52 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
 
   const nextStep = () => {
     if (canProceedToNext() && currentStep < steps.length - 1) {
-      setCurrentStep(currentStep + 1)
+      setCurrentStep((s) => s + 1)
     }
   }
 
   const prevStep = () => {
-    if (currentStep > 0) {
-      setCurrentStep(currentStep - 1)
-    }
+    if (currentStep > 0) setCurrentStep((s) => s - 1)
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (isLoading) return
     setIsLoading(true)
     setError(null)
 
     try {
-      const carOwner: CarOwner = {
-        id: Date.now().toString(),
-        ...form,
+      const userId =
+        initialData?.id ||
+        (typeof window !== "undefined" ? localStorage.getItem("driverUserId") : null)
+
+      if (!userId) {
+        setError("User ID not found. Please sign in again.")
+        setIsLoading(false)
+        return
       }
-      const res = await api.signUp(carOwner)
-      if (res.success) {
-        setCurrentStep(3) // Success step
-        setTimeout(() => onComplete(carOwner), 2000)
-      } else {
-        setError("Sign-up failed. Please try again.")
+
+      // Build payload: (avoid sending email if backend disallows changing)
+      const payload = {
+        fullName: form.fullName,
+        vehicleDetails: {
+          ...form.vehicleDetails,
+          year: form.vehicleDetails.year ? Number(form.vehicleDetails.year) : undefined,
+          batteryCapacityKWh: form.vehicleDetails.batteryCapacityKWh
+            ? Number(form.vehicleDetails.batteryCapacityKWh)
+            : undefined,
+        },
       }
+
+      localStorage.setItem("driverVehicle", JSON.stringify(payload.vehicleDetails))
+      await api.updateProfile(userId, payload)
+      const normalized = normalize(res) || { id: userId, ...form }
+      setCurrentStep(3)
+
+      // Delay for small success animation then call onComplete
+      setTimeout(() => onComplete(normalized), 1400)
     } catch (err) {
+      console.error(err)
       setError("An error occurred. Please try again.")
     } finally {
       setIsLoading(false)
@@ -259,23 +310,23 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
 
           <div>
             <CardTitle className="text-4xl font-bold bg-gradient-to-r from-emerald-600 to-lime-600 bg-clip-text text-transparent">
-              {currentStep === 3 ? "Welcome Aboard!" : "Join ChargeConnect"}
+              {currentStep === 3 ? "Setup Complete!" : "Complete Your Profile"}
             </CardTitle>
-            <CardDescription className="text-lg text-gray-600 mt-2">{steps[currentStep].description}</CardDescription>
+            <CardDescription className="text-lg text-gray-600 mt-2">
+              {steps[currentStep].description}
+            </CardDescription>
           </div>
 
-          {/* Progress Bar */}
-          <div className="w-full max-w-md mx-auto space-y-3">
-            <Progress value={progress} className="h-2" />
-            <div className="flex justify-between text-sm text-gray-500">
-              <span>
-                Step {currentStep + 1} of {steps.length}
-              </span>
-              <span>{Math.round(progress)}% Complete</span>
+            <div className="w-full max-w-md mx-auto space-y-3">
+              <Progress value={progress} className="h-2" />
+              <div className="flex justify-between text-sm text-gray-500">
+                <span>
+                  Step {currentStep + 1} of {steps.length}
+                </span>
+                <span>{Math.round(progress)}% Complete</span>
+              </div>
             </div>
-          </div>
 
-          {/* Step Indicators */}
           <div className="flex justify-center space-x-4">
             {steps.map((step, index) => (
               <div key={index} className="flex flex-col items-center space-y-2">
@@ -284,11 +335,7 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
                     index <= currentStep ? "bg-emerald-500 text-white shadow-lg" : "bg-gray-200 text-gray-400"
                   }`}
                 >
-                  {index < currentStep ? (
-                    <Check className="w-5 h-5" />
-                  ) : (
-                    <span className="text-sm font-semibold">{index + 1}</span>
-                  )}
+                  {index < currentStep ? <Check className="w-5 h-5" /> : <span className="text-sm font-semibold">{index + 1}</span>}
                 </div>
                 <span className={`text-xs font-medium ${index <= currentStep ? "text-emerald-600" : "text-gray-400"}`}>
                   {step.title}
@@ -311,79 +358,49 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-2">
-                      <Label htmlFor="fullName" className="text-sm font-medium text-gray-700">
-                        Full Name *
-                      </Label>
+                      <Label htmlFor="fullName">Full Name *</Label>
                       <Input
                         id="fullName"
                         name="fullName"
-                        placeholder="Enter your full name"
                         value={form.fullName}
                         onChange={handleChange}
-                        className={`h-12 transition-all duration-200 ${
+                        placeholder="Enter your full name"
+                        className={`h-12 ${
                           validationErrors.fullName
                             ? "border-red-300 focus:border-red-500 focus:ring-red-500"
                             : "border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
                         }`}
                       />
-                      {validationErrors.fullName && <p className="text-sm text-red-600">{validationErrors.fullName}</p>}
+                      {validationErrors.fullName && (
+                        <p className="text-sm text-red-600">{validationErrors.fullName}</p>
+                      )}
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="email" className="text-sm font-medium text-gray-700">
-                        Email Address *
-                      </Label>
+                      <Label htmlFor="email">Email *</Label>
                       <Input
                         id="email"
                         name="email"
                         type="email"
-                        placeholder="Enter your email"
                         value={form.email}
                         onChange={handleChange}
-                        className={`h-12 transition-all duration-200 ${
+                        placeholder="Enter your email"
+                        className={`h-12 ${
                           validationErrors.email
                             ? "border-red-300 focus:border-red-500 focus:ring-red-500"
                             : "border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
                         }`}
+                        disabled={!!initialData?.email} // lock email if already set
                       />
-                      {validationErrors.email && <p className="text-sm text-red-600">{validationErrors.email}</p>}
+                      {validationErrors.email && (
+                        <p className="text-sm text-red-600">{validationErrors.email}</p>
+                      )}
                     </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="password" className="text-sm font-medium text-gray-700">
-                      Password *
-                    </Label>
-                    <div className="relative">
-                      <Input
-                        id="password"
-                        name="password"
-                        type={showPassword ? "text" : "password"}
-                        placeholder="Create a secure password"
-                        value={form.password}
-                        onChange={handleChange}
-                        className={`h-12 pr-12 transition-all duration-200 ${
-                          validationErrors.password
-                            ? "border-red-300 focus:border-red-500 focus:ring-red-500"
-                            : "border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
-                        }`}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="absolute right-2 top-1/2 -translate-y-1/2 h-8 w-8 p-0"
-                        onClick={() => setShowPassword(!showPassword)}
-                      >
-                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </Button>
-                    </div>
-                    {validationErrors.password && <p className="text-sm text-red-600">{validationErrors.password}</p>}
                   </div>
                 </div>
               )}
 
               {currentStep === 1 && (
                 <div className="space-y-8">
-                  {/* Popular Brands */}
                   <div className="space-y-4">
                     <Label className="text-sm font-medium text-gray-700">Popular Brands</Label>
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
@@ -392,7 +409,7 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
                           key={brand}
                           type="button"
                           variant={form.vehicleDetails.make === brand ? "default" : "outline"}
-                          className={`h-12 transition-all duration-200 ${
+                          className={`h-12 ${
                             form.vehicleDetails.make === brand
                               ? "bg-emerald-500 hover:bg-emerald-600 text-white"
                               : "hover:border-emerald-300"
@@ -407,137 +424,135 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div className="space-y-2">
-                      <Label htmlFor="make" className="text-sm font-medium text-gray-700">
-                        Make *
-                      </Label>
+                      <Label>Make *</Label>
                       <Input
-                        id="make"
                         name="vehicleDetails.make"
-                        placeholder="e.g., Tesla, BMW, Nissan"
                         value={form.vehicleDetails.make}
                         onChange={handleChange}
-                        className={`h-12 transition-all duration-200 ${
+                        placeholder="e.g., Tesla"
+                        className={`h-12 ${
                           validationErrors["vehicleDetails.make"]
-                            ? "border-red-300 focus:border-red-500 focus:ring-red-500"
-                            : "border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
+                            ? "border-red-300 focus:border-red-500"
+                            : "border-gray-200 focus:border-emerald-500"
                         }`}
                       />
                       {validationErrors["vehicleDetails.make"] && (
-                        <p className="text-sm text-red-600">{validationErrors["vehicleDetails.make"]}</p>
+                        <p className="text-sm text-red-600">
+                          {validationErrors["vehicleDetails.make"]}
+                        </p>
                       )}
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="model" className="text-sm font-medium text-gray-700">
-                        Model *
-                      </Label>
+                      <Label>Model *</Label>
                       <Input
-                        id="model"
                         name="vehicleDetails.model"
-                        placeholder="e.g., Model 3, i3, Leaf"
                         value={form.vehicleDetails.model}
                         onChange={handleChange}
-                        className={`h-12 transition-all duration-200 ${
+                        placeholder="e.g., Model 3"
+                        className={`h-12 ${
                           validationErrors["vehicleDetails.model"]
-                            ? "border-red-300 focus:border-red-500 focus:ring-red-500"
-                            : "border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
+                            ? "border-red-300 focus:border-red-500"
+                            : "border-gray-200 focus:border-emerald-500"
                         }`}
                       />
                       {validationErrors["vehicleDetails.model"] && (
-                        <p className="text-sm text-red-600">{validationErrors["vehicleDetails.model"]}</p>
+                        <p className="text-sm text-red-600">
+                          {validationErrors["vehicleDetails.model"]}
+                        </p>
                       )}
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="year" className="text-sm font-medium text-gray-700">
-                        Year
-                      </Label>
+                      <Label>Year</Label>
                       <Input
-                        id="year"
                         name="vehicleDetails.year"
                         type="number"
-                        placeholder="2023"
-                        value={form.vehicleDetails.year || ""}
+                        value={form.vehicleDetails.year}
                         onChange={handleChange}
+                        placeholder="2023"
                         className="h-12 border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
                       />
                     </div>
                   </div>
 
-                  {/* Connector Selection */}
                   <div className="space-y-4">
-                    <Label className="text-sm font-medium text-gray-700">Primary Connector Type *</Label>
+                    <Label className="text-sm font-medium text-gray-700">Primary Connector *</Label>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {connectorTypes.map((connector) => (
+                      {connectorTypes.map((c) => (
                         <Card
-                          key={connector.id}
-                          className={`cursor-pointer transition-all duration-200 hover:shadow-md ${
-                            form.vehicleDetails.primaryConnector === connector.id
+                          key={c.id}
+                          className={`cursor-pointer transition-all ${
+                            form.vehicleDetails.primaryConnector === c.id
                               ? "ring-2 ring-emerald-500 bg-emerald-50"
                               : "hover:border-emerald-300"
                           }`}
-                          onClick={() => handleConnectorSelect(connector.id)}
+                          onClick={() => handleConnectorSelect(c.id)}
                         >
-                          <CardContent className="p-4">
-                            <div className="flex items-center space-x-3">
-                              <div className="text-2xl">{connector.icon}</div>
-                              <div className="flex-1">
-                                <div className="flex items-center space-x-2">
-                                  <h4 className="font-medium text-gray-900">{connector.name}</h4>
-                                  {connector.popular && (
-                                    <Badge variant="secondary" className="text-xs">
-                                      Popular
-                                    </Badge>
-                                  )}
-                                </div>
-                                <p className="text-sm text-gray-500">{connector.description}</p>
+                          <CardContent className="p-4 flex items-center space-x-3">
+                            <div className="text-2xl">{c.icon}</div>
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-2">
+                                <h4 className="font-medium text-gray-900">{c.name}</h4>
+                                {c.popular && (
+                                  <Badge variant="secondary" className="text-xs">
+                                    Popular
+                                  </Badge>
+                                )}
                               </div>
-                              {form.vehicleDetails.primaryConnector === connector.id && (
-                                <Check className="w-5 h-5 text-emerald-500" />
-                              )}
+                              <p className="text-sm text-gray-500">{c.description}</p>
                             </div>
+                            {form.vehicleDetails.primaryConnector === c.id && (
+                              <Check className="w-5 h-5 text-emerald-500" />
+                            )}
                           </CardContent>
                         </Card>
                       ))}
                     </div>
                     {validationErrors["vehicleDetails.primaryConnector"] && (
-                      <p className="text-sm text-red-600">{validationErrors["vehicleDetails.primaryConnector"]}</p>
+                      <p className="text-sm text-red-600">
+                        {validationErrors["vehicleDetails.primaryConnector"]}
+                      </p>
                     )}
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="speed" className="text-sm font-medium text-gray-700">
-                      Max Charging Speed (kW)
-                    </Label>
+                    <Label>Max Charging Speed (kW)</Label>
                     <Input
-                      id="speed"
                       name="vehicleDetails.maxChargingSpeed"
                       type="number"
-                      placeholder="150"
-                      value={form.vehicleDetails.maxChargingSpeed || ""}
+                      value={form.vehicleDetails.maxChargingSpeed}
                       onChange={handleChange}
-                      className="h-12 border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
+                      placeholder="150"
+                      className="h-12 border-gray-200 focus:border-emerald-500"
                     />
                   </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="adapters" className="text-sm font-medium text-gray-700">
-                      Additional Adapters
-                    </Label>
-                    <Input
-                      id="adapters"
-                      name="vehicleDetails.adapters"
-                      placeholder="e.g., Type 1, J1772 (comma separated)"
-                      value={form.vehicleDetails.adapters?.join(", ") || ""}
-                      onChange={e =>
-                        setForm(prev => ({
-                          ...prev,
-                          vehicleDetails: {
-                            ...prev.vehicleDetails,
-                            adapters: e.target.value.split(",").map(v => v.trim()).filter(Boolean),
-                          },
-                        }))
-                      }
-                      className="h-12 border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
-                    />
+                  <div>
+                    <Label className="text-xs font-medium text-gray-600">Additional Adapters</Label>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {CONNECTOR_TYPES
+                        .filter(c => c !== form.vehicleDetails.primaryConnector)
+                        .map(c => {
+                          const active = form.vehicleDetails.adapters.includes(c)
+                          return (
+                            <button
+                              type="button"
+                              key={c}
+                              onClick={() => {
+                                const next = active
+                                  ? form.vehicleDetails.adapters.filter(a => a !== c)
+                                  : [...form.vehicleDetails.adapters, c]
+                                setForm(prev => ({ ...prev, vehicleDetails: { ...prev.vehicleDetails, adapters: next } }))
+                              }}
+                              className={`px-3 py-1 text-xs rounded-full border transition
+                                ${active
+                                  ? "bg-emerald-600 border-emerald-600 text-white"
+                                  : "bg-gray-100 border-gray-200 text-gray-600 hover:bg-gray-200"}`}
+                            >
+                              {c}
+                            </button>
+                          )
+                        })}
+                    </div>
                   </div>
                 </div>
               )}
@@ -546,30 +561,100 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-2">
-                      <Label htmlFor="networks" className="text-sm font-medium text-gray-700">
-                        Preferred Networks
-                      </Label>
+                      <Label>Preferred Networks</Label>
                       <Input
-                        id="networks"
                         name="preferences.preferredNetworks"
-                        placeholder="e.g., Tesla, ChargePoint, EVgo"
+                        placeholder="e.g., Tesla, ChargePoint"
                         value={form.preferences?.preferredNetworks?.join(", ") || ""}
                         onChange={handleChange}
-                        className="h-12 border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
+                        className="h-12 border-gray-200 focus:border-emerald-500"
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="amenities" className="text-sm font-medium text-gray-700">
-                        Required Amenities
-                      </Label>
+                      <Label>Required Amenities</Label>
                       <Input
-                        id="amenities"
                         name="preferences.requiredAmenities"
-                        placeholder="e.g., WiFi, Restrooms, Food"
+                        placeholder="e.g., WiFi, Restrooms"
                         value={form.preferences?.requiredAmenities?.join(", ") || ""}
                         onChange={handleChange}
-                        className="h-12 border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
+                        className="h-12 border-gray-200 focus:border-emerald-500"
                       />
+                    </div>
+                  </div>
+
+                  {/* Vehicle & Connectors */}
+                  <div className="space-y-4 border rounded-lg p-4">
+                    <h3 className="font-semibold text-sm text-gray-700">Vehicle & Charging</h3>
+                    <div className="grid md:grid-cols-3 gap-3">
+                      <input
+                        className="input"
+                        placeholder="Make"
+                        value={form.vehicleDetails.make}
+                        onChange={e => setForm(prev => ({ ...prev, vehicleDetails: { ...prev.vehicleDetails, make: e.target.value } }))}
+                      />
+                      <input
+                        className="input"
+                        placeholder="Model"
+                        value={form.vehicleDetails.model}
+                        onChange={e => setForm(prev => ({ ...prev, vehicleDetails: { ...prev.vehicleDetails, model: e.target.value } }))}
+                      />
+                      <input
+                        type="number"
+                        className="input"
+                        placeholder="Year"
+                        value={form.vehicleDetails.year}
+                        onChange={e => setForm(prev => ({ ...prev, vehicleDetails: { ...prev.vehicleDetails, year: e.target.value ? +e.target.value : undefined } }))}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-gray-600">Primary Connector</label>
+                      <select
+                        className="mt-1 input"
+                        value={form.vehicleDetails.primaryConnector}
+                        onChange={e =>
+                          setForm(prev => ({
+                            ...prev,
+                            vehicleDetails: {
+                              ...prev.vehicleDetails,
+                              primaryConnector: e.target.value as ConnectorType,
+                              // remove from adapters if it was selected there
+                              adapters: (prev.vehicleDetails.adapters || []).filter(a => a !== e.target.value),
+                            },
+                          }))
+                        }
+                      >
+                        {CONNECTOR_TYPES.map(ct => (
+                          <option key={ct} value={ct}>{ct}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-gray-600">Adapters Owned</label>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {CONNECTOR_TYPES.filter(c => c !== form.vehicleDetails.primaryConnector).map(c => {
+                          const active = form.vehicleDetails.adapters.includes(c)
+                          return (
+                            <button
+                              type="button"
+                              key={c}
+                              onClick={() => {
+                                const next = active
+                                  ? form.vehicleDetails.adapters.filter(a => a !== c)
+                                  : [...form.vehicleDetails.adapters, c]
+                                setForm(prev => ({ ...prev, vehicleDetails: { ...prev.vehicleDetails, adapters: next } }))
+                              }}
+                              className={`px-3 py-1 text-xs rounded-full border transition
+                                ${active
+                                  ? "bg-emerald-600 border-emerald-600 text-white"
+                                  : "bg-gray-100 border-gray-200 text-gray-600 hover:bg-gray-200"}`}
+                            >
+                              {c}
+                            </button>
+                          )
+                        })}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -586,10 +671,11 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
                     <Check className="w-12 h-12 text-white" />
                   </motion.div>
                   <div>
-                    <h3 className="text-2xl font-bold text-gray-900 mb-2">Setup Complete!</h3>
+                    <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                      Setup Complete!
+                    </h3>
                     <p className="text-gray-600">
-                      Welcome to ChargeConnect! We're finding the best charging stations for your {form.vehicleDetails.make}{" "}
-                      {form.vehicleDetails.model}.
+                      Welcome! We are getting your charging experience ready.
                     </p>
                   </div>
                   <div className="flex justify-center">
@@ -613,14 +699,13 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
             </motion.div>
           )}
 
-          {/* Navigation Buttons */}
           {currentStep < 3 && (
             <div className="flex justify-between mt-8">
               <Button
                 type="button"
                 variant="outline"
                 onClick={prevStep}
-                disabled={currentStep === 0}
+                disabled={currentStep === 0 || isLoading}
                 className="flex items-center space-x-2 bg-transparent"
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -630,13 +715,13 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
               {currentStep === 2 ? (
                 <Button
                   onClick={handleSubmit}
-                  disabled={isLoading}
+                  disabled={isLoading || !canProceedToNext()}
                   className="bg-gradient-to-r from-emerald-600 to-lime-600 hover:from-emerald-700 hover:to-lime-700 text-white font-semibold px-8 flex items-center space-x-2"
                 >
                   {isLoading ? (
                     <>
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      <span>Setting up...</span>
+                      <span>Saving...</span>
                     </>
                   ) : (
                     <>
@@ -649,7 +734,7 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
                 <Button
                   type="button"
                   onClick={nextStep}
-                  disabled={!canProceedToNext()}
+                  disabled={!canProceedToNext() || isLoading}
                   className="bg-gradient-to-r from-emerald-600 to-lime-600 hover:from-emerald-700 hover:to-lime-700 text-white font-semibold px-8 flex items-center space-x-2"
                 >
                   <span>Next</span>
@@ -662,4 +747,9 @@ export default function OnboardingForm({ onComplete }: { onComplete: (data: CarO
       </Card>
     </div>
   )
+}
+
+function generateId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID()
+  return "veh_" + Math.random().toString(36).slice(2, 10)
 }

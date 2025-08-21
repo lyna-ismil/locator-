@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
+const bcrypt = require('bcryptjs'); // added for pre-save hashing
 
 // Defines the schema for the nested vehicleDetails object
 const vehicleDetailsSchema = new Schema({
@@ -33,11 +34,14 @@ const carOwnerSchema = new Schema({
         type: String, 
         required: true, 
         unique: true, 
-        lowercase: true 
+        lowercase: true, 
+        trim: true
     },
+    // Password is stored but hidden by default
     password: { 
         type: String, 
-        required: true 
+        required: true, 
+        select: false 
     },
     vehicleDetails: { 
         type: vehicleDetailsSchema, 
@@ -56,10 +60,23 @@ const carOwnerSchema = new Schema({
     // --- NEW FIELD ---
     // Embeds the preferences schema into the main user document.
     preferences: { 
-        type: preferencesSchema 
+        type: preferencesSchema, 
+        default: {} 
     }
 }, {
     timestamps: true
+});
+
+// Pre-save hook: hash password if new or modified
+carOwnerSchema.pre('save', async function(next) {
+    try {
+        if (!this.isModified('password')) return next();
+        const salt = await bcrypt.genSalt(10);
+        this.password = await bcrypt.hash(this.password, salt);
+        next();
+    } catch (err) {
+        next(err);
+    }
 });
 
 module.exports = mongoose.model('CarOwner', carOwnerSchema);

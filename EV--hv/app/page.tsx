@@ -120,6 +120,9 @@ export default function HomePage() {
     },
   });
 
+  const [error, setError] = useState<string>("");
+  const [success, setSuccess] = useState<string>("");
+
   async function handleOwnerSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
@@ -142,16 +145,29 @@ export default function HomePage() {
       return;
     }
 
+    // Ensure at least one connector (backend requires it)
+    const defaultConnector = {
+      type: "TYPE2",
+      chargerLevel: "AC Level 2",
+      powerKW: 22,
+      status: "Available",
+    }
+
+    const connectors = Array.isArray((ownerForm as any).connectors) && (ownerForm as any).connectors.length
+      ? (ownerForm as any).connectors
+      : [defaultConnector]
+
     const payload = {
       ...ownerForm,
-      ownerId: ownerForm.email, // or a real ownerId if available
+      ownerId: ownerForm.email,
       location: {
         ...ownerForm.location,
         coordinates: [
           Number(ownerForm.location.coordinates[0]),
           Number(ownerForm.location.coordinates[1])
         ]
-      }
+      },
+      connectors, // <-- added
     };
 
     try {

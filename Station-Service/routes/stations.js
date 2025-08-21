@@ -1,187 +1,255 @@
-const express = require('express');
-const router = express.Router();
-const Station = require('../models/Station');
+const express = require('express')
+const router = express.Router()
+const Station = require('../models/Station')
+const mongoose = require('mongoose')
+const { ALLOWED_CONNECTORS } = Station
 
-/*
- * @route   GET /health
- * @desc    Health check endpoint for the gateway
- * @access  Public
- */
-router.get('/health', (req, res) => {
-    res.status(200).json({ status: 'UP', message: 'Station service is running.' });
-});
+function normalizeConnectorType(raw = "") {
+  const r = raw.replace(/[\s_-]/g,"").toUpperCase()
+  if (r === "MENNEKES") return "TYPE2"
+  if (r === "J1772") return "TYPE1"
+  if (r === "GBT") return "GB_T"
+  if (ALLOWED_CONNECTORS.includes(r)) return r
+  return null
+}
 
-/*
- * @route   POST /
- * @desc    Create a new charging station
- * @access  Private (for Admins or Station Owners)
- */
-router.post('/', async (req, res) => {
-    try {
-        // In a real app, you'd get ownerId from an authenticated user
-        const newStation = new Station(req.body);
-        await newStation.save();
-        res.status(201).json(newStation);
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
-});
+function validateConnectors(list) {
+  if (!Array.isArray(list) || !list.length) return "At least one connector required"
+  for (const c of list) {
+    if (!c.type || !ALLOWED_CONNECTORS.includes(String(c.type).toUpperCase()))
+      return `Invalid connector type: ${c.type}`
+    if (!c.chargerLevel) return "connector.chargerLevel required"
+    if (c.powerKW == null || c.powerKW <= 0) return "connector.powerKW must be > 0"
+    c.type = String(c.type).toUpperCase()
+    c.status = c.status || "Available"
+  }
+  return null
+}
 
-/*
- * @route   GET /
- * @desc    Get all stations
- * @access  Public
- */
-router.get('/', async (req, res) => {
-    try {
-        const stations = await Station.find();
-        res.json(stations);
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
-});
+function ensureDefaultConnector(body){
+  if (!body.connectors || !Array.isArray(body.connectors) || body.connectors.length === 0){
+    body.connectors = [{
+      type: "TYPE2",
+      chargerLevel: "AC Level 2",
+      powerKW: 22,
+      status: "Available"
+    }]
+  }
+}
 
-/*
- * @route   GET /nearby
- * @desc    Find nearby charging stations
- * @access  Public
- */
-router.get('/nearby', async (req, res) => {
-    try {
-        const { longitude, latitude, radius } = req.query; // radius in meters
-
-        if (!longitude || !latitude) {
-            return res.status(400).json({ msg: 'Longitude and latitude are required.' });
-        }
-
-        const stations = await Station.find({
-            location: {
-                $near: {
-                    $geometry: {
-                        type: 'Point',
-                        coordinates: [parseFloat(longitude), parseFloat(latitude)]
-                    },
-                    $maxDistance: parseInt(radius) || 5000 // Default 5km radius
-                }
-            }
-        });
-        res.json(stations);
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
-});
-
-/*
- * @route   GET /:id
- * @desc    Get a single station by its ID
- * @access  Public
- */
-router.get('/:id', async (req, res) => {
-    try {
-        const station = await Station.findById(req.params.id);
-        if (!station) {
-            return res.status(404).json({ msg: 'Station not found.' });
-        }
-        res.json(station);
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
-});
-
-/*
- * @route   PUT /:id
- * @desc    Update a station's details
- * @access  Private (for Admins or Station Owners)
- */
-router.put('/:id', async (req, res) => {
+// POST / (owner adds station) — add logging + default connector + stronger validation
+router.post('/', async (req,res) => {
+  console.log('[stations] POST / payload:', JSON.stringify(req.body))
   try {
-    console.log("Update payload:", req.body);
-    const station = await Station.findByIdAndUpdate(
+    const {
+      stationName,
+      network,
+      location,
+      ownerId: bodyOwnerId,
+      email
+    } = req.body
+    const headerOwner = req.headers['x-owner-id']
+    const ownerId = bodyOwnerId || headerOwner
+
+    if (!stationName || !network || !location?.coordinates) {
+      return res.status(400).json({ msg:'stationName, network, location required' })
+    }
+    if (!ownerId && !email) {
+      return res.status(400).json({ msg:'ownerId or email required' })
+    }
+
+    // Normalize coordinates early
+    if (location?.coordinates?.length === 2){
+      const lng = Number(location.coordinates[0])
+      const lat = Number(location.coordinates[1])
+      if (!isFinite(lng) || !isFinite(lat)){
+        return res.status(400).json({ msg:'coordinates must be numeric' })
+      }
+      req.body.location = { type:'Point', coordinates:[lng, lat] }
+    }
+
+    ensureDefaultConnector(req.body)
+    const vErr = validateConnectors(req.body.connectors)
+    if (vErr) return res.status(400).json({ msg: vErr })
+
+    const station = await Station.create({
+      ...req.body,
+      ownerId: ownerId || req.body.ownerId
+    })
+    console.log('[stations] Created station id:', station._id.toString())
+    res.status(201).json(station)
+  } catch (e) {
+    console.error('Create station error', e)
+    res.status(500).json({ msg:'Server Error', error: e.message })
+  }
+})
+
+router.get('/', async (req, res) => {
+  try {
+    const { ownerId } = req.query
+    const filter = {}
+    if (ownerId) filter.ownerId = ownerId
+    const stations = await Station.find(filter).select('-password')
+    res.json(stations)
+  } catch (e) {
+    console.error('List stations error', e)
+    res.status(500).json({ msg:'Server Error' })
+  }
+})
+
+router.get('/nearby', async (req,res) => {
+  try {
+    // Accept latitude/longitude or lat/lng
+    const { latitude, longitude, lat, lng, radius, connectors } = req.query
+    const latRaw = latitude ?? lat
+    const lngRaw = longitude ?? lng
+    if (latRaw == null || lngRaw == null) {
+      return res.status(400).json({ msg:'lat/latitude and lng/longitude are required' })
+    }
+    const latNum = Number(latRaw)
+    const lngNum = Number(lngRaw)
+    if (!isFinite(latNum) || !isFinite(lngNum)) {
+      return res.status(400).json({ msg:'Invalid coordinate values' })
+    }
+    let r = Number(radius) || 5000
+    if (r > 50000) r = 50000
+
+    const connectorTypes = connectors
+      ? String(connectors).split(',').map(s=>s.trim()).filter(Boolean)
+      : null
+
+    const query = {
+      location: {
+        $near: {
+          $geometry: { type:'Point', coordinates:[lngNum, latNum] },
+          $maxDistance: r
+        }
+      }
+    }
+    if (connectorTypes?.length) {
+      query['connectors.type'] = { $in: connectorTypes }
+    }
+
+    const results = await Station.find(query)
+      .limit(300)
+      .select('-password')
+      .lean()
+
+    res.json(results)
+  } catch (e) {
+    console.error('Nearby error', e)
+    res.status(500).json({ msg:'Server Error' })
+  }
+})
+
+router.get('/health', (_req, res) => {
+  res.json({ status: 'UP', service: 'station-service' })
+})
+
+router.get('/:id', async (req,res) => {
+  const { id } = req.params
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ msg: 'Invalid station id' })
+  }
+  try {
+    const st = await Station.findById(id).select('-password')
+    if (!st) return res.status(404).json({ msg:'Station not found.' })
+    res.json(st)
+  } catch (e) {
+    console.error('Get station error', e)
+    res.status(500).json({ msg:'Server Error' })
+  }
+})
+
+router.put('/:id', async (req,res) => {
+  try {
+    if (req.body.connectors) {
+      const err = validateConnectors(req.body.connectors)
+      if (err) return res.status(400).json({ msg: err })
+    }
+    const st = await Station.findByIdAndUpdate(
       req.params.id,
       { $set: req.body },
       { new: true, runValidators: true }
-    );
-    if (!station) {
-      return res.status(404).json({ msg: 'Station not found.' });
-    }
-    res.json({ msg: 'Station updated successfully.', station });
-  } catch (err) {
-    console.error("Update error:", err);
-    res.status(500).json({ msg: 'Server Error', error: err.message, stack: err.stack });
+    ).select('-password')
+    if (!st) return res.status(404).json({ msg:'Station not found.' })
+    res.json({ msg:'Station updated successfully.', station: st })
+  } catch (e) {
+    console.error('Update error', e)
+    res.status(500).json({ msg:'Server Error', error: e.message })
   }
-});
+})
 
-/*
- * @route   DELETE /:id
- * @desc    Delete a station
- * @access  Private (for Admins or Station Owners)
- */
-router.delete('/:id', async (req, res) => {
-    try {
-        const station = await Station.findByIdAndDelete(req.params.id);
+router.delete('/:id', async (req,res) => {
+  try {
+    const st = await Station.findByIdAndDelete(req.params.id)
+    if (!st) return res.status(404).json({ msg:'Station not found.' })
+    res.json({ msg:'Station removed successfully.' })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ msg:'Server Error' })
+  }
+})
 
-        if (!station) {
-            return res.status(404).json({ msg: 'Station not found.' });
-        }
+// OPTIONAL: adjust /signup to ensure email/password required distinctly
+router.post('/signup', async (req,res) => {
+  console.log('[stations] POST /signup payload:', JSON.stringify(req.body))
+  try {
+    const { email, password, stationName, network, location } = req.body
+    if (!email || !password) return res.status(400).json({ msg:'email & password required' })
+    if (!stationName || !network || !location?.coordinates)
+      return res.status(400).json({ msg:'stationName, network, location required' })
 
-        res.json({ msg: 'Station removed successfully.' });
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
-});
+    req.body.ownerId = req.body.ownerId || email
+    // coords normalize
+    const coords = location.coordinates
+    if (!Array.isArray(coords) || coords.length !==2) return res.status(400).json({ msg:'location.coordinates must be [lng,lat]' })
+    const lng = Number(coords[0]), lat = Number(coords[1])
+    if (!isFinite(lng) || !isFinite(lat)) return res.status(400).json({ msg:'coordinates must be numbers' })
+    req.body.location = { type:'Point', coordinates:[lng, lat] }
 
-/*
- * @route   POST /signup
- * @desc    Register a new station owner (and their station)
- * @access  Public
- */
-router.post('/signup', async (req, res) => {
-    try {
-        const { email, password, ...rest } = req.body;
-        // Check if email already exists
-        const existing = await Station.findOne({ email });
-        if (existing) {
-            return res.status(400).json({ msg: 'Email already registered.' });
-        }
-        // Create station owner (and station)
-        const newStation = new Station({ email, password, ...rest });
-        await newStation.save();
-        // Set ownerId to its own _id for filtering
-        newStation.ownerId = newStation._id;
-        await newStation.save();
-        res.status(201).json(newStation);
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).json({ msg: 'Server Error' });
+    if (!req.body.connectors || !req.body.connectors.length) {
+      req.body.connectors = [{
+        type:"TYPE2",
+        chargerLevel:"AC Level 2",
+        powerKW:22,
+        status:"Available"
+      }]
     }
-});
 
-/*
- * @route   POST /signin
- * @desc    Station Owner login
- * @access  Public
- */
-router.post('/signin', async (req, res) => {
-    const { email, password } = req.body;
-    try {
-        const owner = await Station.findOne({ email });
-        if (!owner) {
-            return res.status(401).json({ msg: 'Invalid credentials.' });
-        }
-        // For production, use bcrypt to compare hashed passwords!
-        if (owner.password !== password) {
-            return res.status(401).json({ msg: 'Invalid credentials.' });
-        }
-        res.json({ msg: 'Login successful', owner });
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).json({ msg: 'Server Error' });
+    const vErr = validateConnectors(req.body.connectors)
+    if (vErr) return res.status(400).json({ msg:vErr })
+
+    console.log('[stations] POST /signup inserting email:', req.body.email)
+    const st = await Station.create(req.body)
+    res.status(201).json(st)
+  } catch (e) {
+    if (e.code === 11000) {
+      return res.status(409).json({ msg:'Email already registered.' })
     }
-});
+    console.error('Signup error', e)
+    res.status(500).json({ msg:'Server Error', error:e.message })
+  }
+})
 
-module.exports = router;
+router.post('/signin', async (req,res) => {
+  try {
+    let { email, password } = req.body
+    if (!email || !password) return res.status(400).json({ msg:'email & password required' })
+    email = email.toLowerCase().trim()
+
+    const st = await Station.findOne({ email }).select('+password')
+    if (!st) return res.status(401).json({ msg:'Invalid credentials.' })
+    if (st.password !== password) return res.status(401).json({ msg:'Invalid credentials.' })
+
+    const obj = st.toObject()
+    delete obj.password
+    res.json({ msg:'Login successful', station: obj })
+  } catch (e) {
+    console.error('Signin error', e)
+    res.status(500).json({ msg:'Server Error' })
+  }
+})
+
+
+module.exports = router

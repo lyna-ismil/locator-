@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Progress } from "@/components/ui/progress"
 import ReservationCountdown from "./ReservationCountdown"
-import type { Station, Reservation } from "../types"
+import type { Station, Reservation, CarOwner } from "../types"
 
 const api = {
   createReservation: async (
@@ -86,26 +86,40 @@ export default function ReservationFlow({
   const connector = station.connectors.find((c) => c.id === chargerId)
 
   async function handleConfirm() {
+    if (!user || !station) return
     setLoading(true)
+    setError(null)
     try {
-      // Calculate start and end time for reservation
-      const startTime = new Date().toISOString()
-      const endTime = new Date(Date.now() + estimates.duration * 60 * 1000).toISOString()
-      // Send all required info to backend
+      // Ensure carId retrieval works with new id
+      const carId = user.vehicle?.id || user.vehicleId
+      if (!carId) {
+        setError("Missing vehicle ID. Update your vehicle profile first.")
+        setLoading(false)
+        return
+      }
+      if (!chargerId) {
+        setError("Select a connector before reserving.")
+        setLoading(false)
+        return
+      }
+      const start = startTime || new Date().toISOString()
+      const end = endTime || new Date(Date.now() + 30 * 60 * 1000).toISOString()
+
+      // Correct argument order: (userId, carId, stationId, connectorId, start, end, paymentMethod)
       const res = await api.createReservation(
         user.id,
-        user.vehicleDetails?.id || "", // If your vehicle has an id, otherwise pass ""
+        carId,
         station.id,
         chargerId,
-        startTime,
-        endTime,
+        start,
+        end,
         paymentMethod
       )
+
       setReservation(res)
-      setStep("success")
-      onComplete(res)
-    } catch (error) {
-      console.error("Reservation failed:", error)
+      onCompleted?.(res)
+    } catch (e:any) {
+      setError(e.message || "Reservation failed")
     } finally {
       setLoading(false)
     }

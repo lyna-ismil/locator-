@@ -7,8 +7,16 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Zap, Power, Settings, Check, X } from "lucide-react"
+import { CONNECTOR_TYPES } from "@/app/shared/connectors"
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select"
 
-export function ConnectorEditor({ connector, stationId, fetchStations }) {
+interface ConnectorEditorProps {
+  connector: StandardConnector
+  onChange: (c: StandardConnector) => void
+  onRemove?: () => void
+}
+
+export function ConnectorEditor({ connector, onChange, onRemove }: ConnectorEditorProps) {
   const [editData, setEditData] = useState({
     type: connector.type,
     chargerLevel: connector.chargerLevel,
@@ -28,17 +36,22 @@ export function ConnectorEditor({ connector, stationId, fetchStations }) {
             {isEditing ? (
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="connector-type" className="text-sm font-medium text-gray-700 flex items-center gap-2">
-                    <Zap className="h-4 w-4 text-emerald-600" />
+                  <Label htmlFor="connector-type" className="text-xs font-medium text-gray-600">
                     Connector Type
                   </Label>
-                  <Input
-                    id="connector-type"
-                    className="border-emerald-200 focus:border-emerald-400 focus:ring-emerald-400/20"
+                  <Select
                     value={editData.type}
-                    onChange={(e) => setEditData({ ...editData, type: e.target.value })}
-                    placeholder="e.g., Type 2, CCS, CHAdeMO"
-                  />
+                    onValueChange={(value) => setEditData({ ...editData, type: value })}
+                  >
+                    <SelectTrigger id="connector-type">
+                      <SelectValue placeholder="Select connector type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CONNECTOR_TYPES.map(type => (
+                        <SelectItem key={type} value={type}>{type}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div className="space-y-2">

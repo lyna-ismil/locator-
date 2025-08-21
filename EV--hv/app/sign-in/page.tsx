@@ -1,10 +1,9 @@
 "use client"
 
 import type React from "react"
-
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation" // <- added useSearchParams
 import { Zap, Mail, Lock, Eye, EyeOff, Star, CheckCircle2, Shield, Sparkles } from "lucide-react"
 import { FaGoogle, FaFacebook } from "react-icons/fa"
 import { Button } from "@/components/ui/button"
@@ -16,8 +15,41 @@ import TiltCard from "@/components/creative/tilt-card"
 import { Badge } from "@/components/ui/badge"
 import { apiFetch } from "@/lib/api"
 
+/* ---------------- Helper utilities ---------------- */
+function extractId(r: any) {
+  if (r?.station?._id || r?.station?.id) return r.station._id || r.station.id
+  if (r?.user?._id || r?.user?.id) return r.user._id || r.user.id
+  return r?.userId || r?._id || r?.id
+}
+
+function isStationResponse(r: any) {
+  return !!r?.station && (r.station._id || r.station.id)
+}
+
+function normalizeUser(raw: any) {
+  if (!raw) return null
+  const u = raw.user || raw
+  const id = u.id || u._id
+  return {
+    id,
+    fullName: u.fullName || "",
+    email: u.email || "",
+    vehicleDetails: u.vehicleDetails || u.vehicle || {
+      make: "",
+      model: "",
+      primaryConnector: "",
+      adapters: [],
+    },
+    preferences: u.preferences || { preferredNetworks: [], requiredAmenities: [] },
+  }
+}
+
 export default function SignInPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  // role decided ONLY by query param ?role=driver or ?role=owner (default owner)
+  const role = (searchParams.get("role") === "driver" ? "driver" : "owner") as "driver" | "owner"
+
   const [showPassword, setShowPassword] = useState(false)
   const [form, setForm] = useState({ email: "", password: "" })
   const [error, setError] = useState("")
@@ -25,12 +57,7 @@ export default function SignInPage() {
   const [loading, setLoading] = useState(false)
 
   const [testimonials, setTestimonials] = useState<{ quote: string; name: string; role: string; avatar: string }[]>([
-    {
-      quote: "Loading reviews...",
-      name: "",
-      role: "",
-      avatar: "/placeholder.svg?height=64&width=64",
-    },
+    { quote: "Loading reviews...", name: "", role: "", avatar: "/placeholder.svg?height=64&width=64" },
   ])
   const [idx, setIdx] = useState(0)
 
@@ -44,17 +71,10 @@ export default function SignInPage() {
             name: r.name || r.user || "Anonymous",
             role: r.role || "EV User",
             avatar: r.avatar || "/placeholder.svg?height=64&width=64",
-          })),
+          }))
         )
-      } catch (err) {
-        setTestimonials([
-          {
-            quote: "Failed to load reviews.",
-            name: "",
-            role: "",
-            avatar: "/placeholder.svg?height=64&width=64",
-          },
-        ])
+      } catch {
+        setTestimonials([{ quote: "Failed to load reviews.", name: "", role: "", avatar: "/placeholder.svg" }])
       }
     }
     fetchReviews()
@@ -65,7 +85,6 @@ export default function SignInPage() {
     return () => clearInterval(t)
   }, [testimonials.length])
 
-  // Reset error/success on input change
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     setForm({ ...form, [e.target.id]: e.target.value })
     setError("")
@@ -74,34 +93,71 @@ export default function SignInPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (loading) return
     setError("")
     setSuccess("")
     setLoading(true)
+
+    const email = form.email.trim().toLowerCase()
+    const password = form.password
+    if (!email || !password) {
+      setError("Email and password required.")
+      setLoading(false)
+      return
+    }
+
+    const base = (process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5000").replace(/\/$/, "")
+
     try {
-      // Try station owner login first
-      const res = await apiFetch("/stations/signin", {
+      // Try Car Owner first
+      const carRes = await fetch(`${base}/car-owners/signin`, {
         method: "POST",
-        body: JSON.stringify({ email: form.email, password: form.password }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
       })
-      if (res.owner && res.owner._id) {
-        localStorage.setItem("ownerId", res.owner._id)
-        setSuccess("Signed in as station owner!")
+      let carData: any = null
+      try { carData = await carRes.json() } catch (e) { /* ignore parse error */ }
+
+      if (carRes.ok && carData?.user) {
+        const driverId = carData.user._id || carData.user.id
+        if (!driverId) {
+          setError("Missing driver id in response.")
+        } else {
+          localStorage.setItem("authRole", "driver")
+          localStorage.setItem("driverUserId", driverId)
+          localStorage.setItem("driverUser", JSON.stringify(carData.user))
+          localStorage.removeItem("ownerId")
+          setSuccess("Signed in as driver")
+          router.push("/dashboard/driver")
+          return
+        }
+      }
+
+      // If car owner attempt failed, try Station Owner
+      const stationRes = await fetch(`${base}/stations/signin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      })
+      let stationData: any = null
+      try { stationData = await stationRes.json() } catch (e) { /* ignore parse error */ }
+
+      if (stationRes.ok && stationData?.station && stationData.station.ownerId) {
+        const ownerId = stationData.station.ownerId
+        localStorage.setItem("authRole", "owner")
+        localStorage.setItem("ownerId", ownerId)
+        localStorage.removeItem("driverUserId")
+        localStorage.removeItem("driverUser")
+        setSuccess("Signed in as station owner")
         router.push("/dashboard/owner")
-      } else {
-        setError("Login failed: owner ID not found.")
+        return
       }
-    } catch (stationErr: any) {
-      try {
-        // If station login fails, try car owner (driver) login
-        await apiFetch("/car-owners/signin", {
-          method: "POST",
-          body: JSON.stringify({ email: form.email, password: form.password }),
-        })
-        setSuccess("Signed in as driver!")
-        router.push("/dashboard/driver")
-      } catch (driverErr: any) {
-        setError("Invalid email or password.")
-      }
+
+      // Consolidate error message
+      const msg = carData?.msg || stationData?.msg || "Invalid credentials. Please check your email and password."
+      setError(msg)
+    } catch (err: any) {
+      setError(err?.message || "Sign-in failed.")
     } finally {
       setLoading(false)
     }
@@ -148,7 +204,7 @@ export default function SignInPage() {
                   <p className="text-gray-600 mt-2">Sign in to access your charging dashboard</p>
                 </CardHeader>
                 <CardContent className="pt-0 px-8 pb-8">
-                  <form className="space-y-6" onSubmit={handleSubmit}>
+                  <form className="space-y-6" onSubmit={handleSubmit} noValidate>
                     <div className="space-y-3">
                       <Label htmlFor="email" className="text-sm font-semibold text-gray-700">
                         Email Address
@@ -163,6 +219,7 @@ export default function SignInPage() {
                           value={form.email}
                           onChange={handleInputChange}
                           required
+                          autoComplete="email"
                         />
                       </div>
                     </div>
@@ -180,6 +237,7 @@ export default function SignInPage() {
                           value={form.password}
                           onChange={handleInputChange}
                           required
+                          autoComplete="current-password"
                         />
                         <button
                           type="button"
@@ -211,7 +269,7 @@ export default function SignInPage() {
                     <Button
                       type="submit"
                       className="w-full bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 h-12 text-base font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
-                      disabled={success !== "" || loading}
+                      disabled={loading || !!success}
                     >
                       {loading ? (
                         <div className="flex items-center gap-2">
@@ -243,19 +301,13 @@ export default function SignInPage() {
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
-                      <Button
-                        variant="outline"
-                        className="h-12 bg-white hover:bg-gray-50 border-gray-200 rounded-xl font-medium transition-all duration-200"
-                      >
+                      <Button variant="outline" type="button" className="h-12 bg-white border-gray-200 rounded-xl font-medium">
                         <span className="mr-3">
                           <FaGoogle size="1.1rem" />
                         </span>
                         Google
                       </Button>
-                      <Button
-                        variant="outline"
-                        className="h-12 bg-white hover:bg-gray-50 border-gray-200 rounded-xl font-medium transition-all duration-200"
-                      >
+                      <Button variant="outline" type="button" className="h-12 bg-white border-gray-200 rounded-xl font-medium">
                         <span className="mr-3">
                           <FaFacebook size="1.1rem" />
                         </span>
@@ -315,24 +367,9 @@ export default function SignInPage() {
 
               <div className="grid sm:grid-cols-3 gap-4">
                 {[
-                  {
-                    icon: Sparkles,
-                    title: "Fast UX",
-                    desc: "Sign in under 10s.",
-                    color: "from-purple-500 to-pink-500",
-                  },
-                  {
-                    icon: Shield,
-                    title: "Private",
-                    desc: "Data stays protected.",
-                    color: "from-emerald-500 to-teal-500",
-                  },
-                  {
-                    icon: CheckCircle2,
-                    title: "Trusted",
-                    desc: "5.0 community rating.",
-                    color: "from-blue-500 to-indigo-500",
-                  },
+                  { icon: Sparkles, title: "Fast UX", desc: "Sign in under 10s.", color: "from-purple-500 to-pink-500" },
+                  { icon: Shield, title: "Private", desc: "Data stays protected.", color: "from-emerald-500 to-teal-500" },
+                  { icon: CheckCircle2, title: "Trusted", desc: "5.0 community rating.", color: "from-blue-500 to-indigo-500" },
                 ].map((f, i) => (
                   <TiltCard
                     key={i}

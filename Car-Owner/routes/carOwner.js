@@ -31,162 +31,157 @@ router.get('/', async (req, res) => {
 });
 
 /*
- * @route   POST /register
- * @desc    Register a new Car Owner
- * @access  Public
- */
+ * @route   POST /register
+ * @desc    Register a new Car Owner
+ */
 router.post('/register', async (req, res) => {
-    try {
-        const { fullName, email, password, vehicleDetails } = req.body;
+  try {
+    const { fullName, email, password, vehicleDetails } = req.body;
+    if (!fullName || !email || !password || !vehicleDetails ||
+        !vehicleDetails.make || !vehicleDetails.model || !vehicleDetails.primaryConnector) {
+      return res.status(400).json({ msg: 'Missing required fields.' });
+    }
+    let user = await CarOwner.findOne({ email: email.toLowerCase().trim() });
+    if (user) return res.status(400).json({ msg: 'A user with this email already exists.' });
 
-        console.log("Received body:", req.body);
+    // Simplified: model pre-save hook will hash the password
+    user = new CarOwner({
+      fullName,
+      email: email.toLowerCase().trim(),
+      password,
+      vehicleDetails
+    });
 
-        // 1. Basic Validation
-        if (!fullName || !email || !password || !vehicleDetails) {
-            return res.status(400).json({ msg: 'Please provide all required fields, including vehicle details.' });
-        }
-        if (!vehicleDetails.make || !vehicleDetails.model || !vehicleDetails.primaryConnector) {
-            return res.status(400).json({ msg: 'Vehicle make, model, and primaryConnector are required.' });
-        }
+    await user.save();
 
-        // 2. Check if a user with this email already exists
-        let user = await CarOwner.findOne({ email: email.toLowerCase() });
-        if (user) {
-            return res.status(400).json({ msg: 'A user with this email already exists.' });
-        }
-
-        // 3. Create a new CarOwner instance
-        user = new CarOwner({
-            fullName,
-            email,
-            password,
-            vehicleDetails
-        });
-
-        // 4. Hash the password before saving
-        const salt = await bcrypt.genSalt(10);
-        user.password = await bcrypt.hash(password, salt);
-
-        // 5. Save the new user to the database
-        await user.save();
-        
-        // 6. Respond with the created user's data (excluding the password)
-        res.status(201).json({
-            msg: 'Car Owner registered successfully.',
-            user: {
-                id: user.id,
-                fullName: user.fullName,
-                email: user.email,
-                vehicle: user.vehicleDetails,
-                createdAt: user.createdAt
-            }
-        });
-
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
+    res.status(201).json({
+      msg: 'Car Owner registered successfully.',
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        vehicleDetails: user.vehicleDetails,
+        preferences: user.preferences || {},
+        createdAt: user.createdAt
+      }
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server Error');
+  }
 });
 
 /*
- * @route   GET /profile/:id
- * @desc    Get a Car Owner's profile by ID
- * @access  Private (requires authentication)
- */
+ * @route   GET /profile/:id
+ * @desc    Get profile
+ */
 router.get('/profile/:id', async (req, res) => {
-    try {
-        // Find the user by their ID and exclude the password from the result
-        const user = await CarOwner.findById(req.params.id).select('-password');
-
-        if (!user) {
-            return res.status(404).json({ msg: 'User not found.' });
-        }
-
-        res.json(user);
-
-    } catch (err) {
-        console.error(err.message);
-        // If the ID format is invalid, it might throw an error
-        if (err.kind === 'ObjectId') {
-            return res.status(404).json({ msg: 'User not found.' });
-        }
-        res.status(500).send('Server Error');
-    }
+  try {
+    const user = await CarOwner.findById(req.params.id).select('-password');
+    if (!user) return res.status(404).json({ msg: 'User not found.' });
+    res.json({
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        vehicleDetails: user.vehicleDetails,
+        preferences: user.preferences || {},
+        createdAt: user.createdAt
+      }
+    });
+  } catch (err) {
+    console.error(err.message);
+    if (err.kind === 'ObjectId') return res.status(404).json({ msg: 'User not found.' });
+    res.status(500).send('Server Error');
+  }
 });
 
 /*
- * @route   PUT /profile/:id
- * @desc    Update a Car Owner's profile
- * @access  Private (requires authentication)
- */
+ * @route   PUT /profile/:id
+ * @desc    Update profile
+ */
 router.put('/profile/:id', async (req, res) => {
-    try {
-        const { fullName, vehicleDetails } = req.body;
+  try {
+    const { fullName, vehicleDetails, preferences } = req.body;
+    const updatedFields = {};
+    if (fullName) updatedFields.fullName = fullName;
+    if (vehicleDetails) updatedFields.vehicleDetails = vehicleDetails;
+    if (preferences) updatedFields.preferences = preferences;
 
-        // Build the update object
-        const updatedFields = {};
-        if (fullName) updatedFields.fullName = fullName;
-        if (vehicleDetails) updatedFields.vehicleDetails = vehicleDetails;
+    const user = await CarOwner.findByIdAndUpdate(
+      req.params.id,
+      { $set: updatedFields },
+      { new: true }
+    ).select('-password');
+    if (!user) return res.status(404).json({ msg: 'User not found.' });
 
-        // Find the user by ID and update their details
-        // The { new: true } option returns the modified document
-        const user = await CarOwner.findByIdAndUpdate(
-            req.params.id,
-            { $set: updatedFields },
-            { new: true }
-        ).select('-password');
-
-        if (!user) {
-            return res.status(404).json({ msg: 'User not found.' });
-        }
-
-        res.json({ msg: 'Profile updated successfully.', user });
-
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
+    res.json({
+      msg: 'Profile updated successfully.',
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        vehicleDetails: user.vehicleDetails,
+        preferences: user.preferences || {},
+        createdAt: user.createdAt
+      }
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server Error');
+  }
 });
 
 /*
  * @route   POST /signin
- * @desc    Sign in as a Car Owner (EV Driver)
- * @access  Public
+ * @desc    Sign in
  */
 router.post('/signin', async (req, res) => {
-    try {
-        const { email, password } = req.body;
-        if (!email || !password) {
-            return res.status(400).json({ msg: 'Please provide email and password.' });
-        }
+  try {
+    const { email, password } = req.body
+    if (!email || !password) return res.status(400).json({ msg: 'Please provide email and password.' })
 
-        // Find user by email
-        const user = await CarOwner.findOne({ email: email.toLowerCase() });
-        if (!user) {
-            return res.status(400).json({ msg: 'Invalid email or password.' });
-        }
+    // INCLUDE the password field for this query
+    const user = await CarOwner.findOne({ email: email.toLowerCase().trim() }).select('+password')
+    if (!user) return res.status(400).json({ msg: 'Invalid email or password.' })
 
-        // Compare password
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(400).json({ msg: 'Invalid email or password.' });
-        }
+    // use bcrypt (bcryptjs) imported at the top of the file
+    const isMatch = await bcrypt.compare(password, user.password)
+    if (!isMatch) return res.status(400).json({ msg: 'Invalid email or password.' })
 
-        // Success: return user info (excluding password)
-        res.json({
-            msg: 'Signed in successfully.',
-            user: {
-                id: user.id,
-                fullName: user.fullName,
-                email: user.email,
-                vehicle: user.vehicleDetails,
-                createdAt: user.createdAt
-            }
-        });
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
+    const safeUser = user.toObject()
+    delete safeUser.password
+    res.json({ msg: 'Signin successful', user: safeUser })
+  } catch (err) {
+    console.error('Signin error', err)
+    res.status(500).json({ msg: 'Server Error' })
+  }
+});
+
+/*
+ * @route   GET /:id
+ * @desc    (Alias) Get profile by ID
+ * @note    Placed AFTER specific routes to avoid collisions.
+ */
+router.get('/:id', async (req, res) => {
+  try {
+    const user = await CarOwner.findById(req.params.id).select('-password');
+    if (!user) return res.status(404).json({ msg: 'User not found.' });
+    res.json({
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        vehicleDetails: user.vehicleDetails,
+        preferences: user.preferences || {},
+        createdAt: user.createdAt
+      }
+    });
+  } catch (err) {
+    console.error(err.message);
+    if (err.kind === 'ObjectId') return res.status(404).json({ msg: 'User not found.' });
+    res.status(500).send('Server Error');
+  }
 });
 
 module.exports = router;

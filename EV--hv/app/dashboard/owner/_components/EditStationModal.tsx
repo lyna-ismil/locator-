@@ -21,8 +21,14 @@ import {
   Plus,
   Trash2,
   Edit3,
+  BadgeCheck,
+  Utensils,
+  ShoppingBag,
+  ParkingSquare,
+  Coffee,
 } from "lucide-react"
 import type { Station } from "../types"
+import { CONNECTOR_TYPES, CONNECTOR_STATUSES } from "@/app/shared/connectors"
 
 interface EditStationModalProps {
   station: Station
@@ -58,9 +64,20 @@ export function EditStationModal({ station, onClose, onStationUpdated }: EditSta
       restrooms: station.amenities?.restrooms ?? false,
       food: station.amenities?.food ?? false,
       shopping: station.amenities?.shopping ?? false,
+      parking: station.amenities?.parking ?? false,
+      coffee: station.amenities?.coffee ?? false,
     },
     connectors: station.connectors || [],
   })
+
+  const availableAmenities = [
+    { id: "wifi", name: "Wi-Fi", icon: <Wifi className="h-5 w-5 text-emerald-600" /> },
+    { id: "restrooms", name: "Restrooms", icon: <BadgeCheck className="h-5 w-5 text-emerald-600" /> },
+    { id: "food", name: "Food", icon: <Utensils className="h-5 w-5 text-emerald-600" /> },
+    { id: "shopping", name: "Shopping", icon: <ShoppingBag className="h-5 w-5 text-emerald-600" /> },
+    { id: "parking", name: "Free Parking", icon: <ParkingSquare className="h-5 w-5 text-emerald-600" /> },
+    { id: "coffee", name: "Coffee Shop", icon: <Coffee className="h-5 w-5 text-emerald-600" /> },
+  ]
 
   const handleConnectorChange = (idx: number, field: string, value: any) => {
     setFormData((prev) => ({
@@ -114,13 +131,6 @@ export function EditStationModal({ station, onClose, onStationUpdated }: EditSta
     } finally {
       setIsSubmitting(false)
     }
-  }
-
-  const amenityIcons = {
-    wifi: Wifi,
-    restrooms: Building2,
-    food: Car, // Replace with a more suitable food icon if available
-    shopping: Network, // Replace with a more suitable shopping icon if available
   }
 
   return (
@@ -532,30 +542,31 @@ export function EditStationModal({ station, onClose, onStationUpdated }: EditSta
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {Object.entries(amenityIcons).map(([amenity, icon]) => {
-                  const IconComponent = typeof icon === "string" ? null : icon
-                  return (
-                    <label
-                      key={amenity}
-                      className="flex items-center gap-3 p-3 bg-gray-50/50 rounded-lg border border-gray-200/50 cursor-pointer hover:bg-emerald-50/50 hover:border-emerald-200 transition-colors"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={formData.amenities[amenity]}
-                        onChange={(e) => handleAmenityChange(amenity, e.target.checked)}
-                        className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
-                      />
-                      <div className="flex items-center gap-2">
-                        {IconComponent ? (
-                          <IconComponent className="h-4 w-4 text-emerald-600" />
-                        ) : (
-                          <span className="text-sm">{icon}</span>
-                        )}
-                        <span className="text-sm font-medium text-gray-700 capitalize">{amenity}</span>
-                      </div>
-                    </label>
-                  )
-                })}
+                {availableAmenities.map(a => (
+                  <label
+                    key={a.id}
+                    className="flex items-center gap-3 p-3 bg-gray-50/50 rounded-lg border border-gray-200/50 cursor-pointer hover:bg-emerald-50/50 hover:border-emerald-200 transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={formData.amenities[a.id as keyof typeof formData.amenities]}
+                      onChange={(e) =>
+                        setFormData(prev => ({
+                          ...prev,
+                          amenities: {
+                            ...prev.amenities,
+                            [a.id]: e.target.checked,
+                          },
+                        }))
+                      }
+                      className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <div className="flex items-center gap-2">
+                      {a.icon}
+                      <span className="text-sm font-medium text-gray-700">{a.name}</span>
+                    </div>
+                  </label>
+                ))}
               </div>
             </CardContent>
           </Card>
@@ -574,70 +585,89 @@ export function EditStationModal({ station, onClose, onStationUpdated }: EditSta
                   <p className="text-sm">No connectors added yet</p>
                 </div>
               )}
-              {formData.connectors.map((connector, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center gap-4 p-4 bg-gray-50/50 rounded-lg border border-gray-200/50"
-                >
-                  <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-2">
-                    <Input
-                      placeholder="Connector Type (e.g., CCS Combo 1, Type 2, CHAdeMO)"
-                      value={connector.type}
-                      onChange={(e) => handleConnectorChange(idx, "type", e.target.value)}
-                      required
-                      className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+              <div className="space-y-3">
+                <h4 className="text-sm font-medium text-gray-700">Connectors</h4>
+                {formData.connectors.map((c:any, i:number) => (
+                  <div key={`${c._id || c.type}-${i}`} className="grid md:grid-cols-6 gap-2 items-center bg-gray-50 p-3 rounded">
+                    <select
+                      className="input"
+                      value={c.type}
+                      onChange={e =>
+                        setFormData(p => {
+                          const list = [...p.connectors]
+                          list[i].type = e.target.value
+                          return { ...p, connectors: list }
+                        })
+                      }
+                    >
+                      {CONNECTOR_TYPES.map(t => <option key={t}>{t}</option>)}
+                    </select>
+                    <input
+                      className="input md:col-span-2"
+                      placeholder="Charger Level"
+                      value={c.chargerLevel}
+                      onChange={e =>
+                        setFormData(p => {
+                          const list = [...p.connectors]
+                          list[i].chargerLevel = e.target.value
+                          return { ...p, connectors: list }
+                        })
+                      }
                     />
-                    <Input
-                      placeholder="Charger Level (e.g., Level 2, DC Fast)"
-                      value={connector.chargerLevel || ""}
-                      onChange={(e) => handleConnectorChange(idx, "chargerLevel", e.target.value)}
-                      required
-                      className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
-                    />
-                    <Input
+                    <input
                       type="number"
-                      step="any"
-                      placeholder="Power (kW)"
-                      value={connector.powerKW || ""}
-                      onChange={(e) => handleConnectorChange(idx, "powerKW", e.target.value)}
-                      required
-                      className="border-emerald-200 focus:border-emerald-500 focus:ring-emerald-500"
+                      className="input"
+                      placeholder="kW"
+                      min={1}
+                      value={c.powerKW}
+                      onChange={e =>
+                        setFormData(p => {
+                          const list = [...p.connectors]
+                          list[i].powerKW = +e.target.value
+                          return { ...p, connectors: list }
+                        })
+                      }
                     />
+                    <select
+                      className="input"
+                      value={c.status}
+                      onChange={e =>
+                        setFormData(p => {
+                          const list = [...p.connectors]
+                          list[i].status = e.target.value
+                          return { ...p, connectors: list }
+                        })
+                      }
+                    >
+                      {CONNECTOR_STATUSES.map(s => <option key={s}>{s}</option>)}
+                    </select>
+                    <button
+                      type="button"
+                      className="text-red-500 text-xs"
+                      onClick={() =>
+                        setFormData(p => ({ ...p, connectors: p.connectors.filter((_:any, idx:number) => idx !== i) }))
+                      }
+                    >
+                      Remove
+                    </button>
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        connectors: prev.connectors.filter((_, i) => i !== idx),
-                      }))
-                    }
-                    className="border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  setFormData((prev) => ({
-                    ...prev,
-                    connectors: [
-                      ...prev.connectors,
-                      { type: "", chargerLevel: "", powerKW: "" },
-                    ],
-                  }))
-                }
-                className="w-full border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:border-emerald-300"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Add Connector
-              </Button>
+                ))}
+                <button
+                  type="button"
+                  className="text-xs bg-emerald-600 text-white px-3 py-2 rounded"
+                  onClick={() =>
+                    setFormData(p => ({
+                      ...p,
+                      connectors: [
+                        ...p.connectors,
+                        { type: "CCS", chargerLevel: "AC Level 2", powerKW: 22, status: "Available" },
+                      ],
+                    }))
+                  }
+                >
+                  + Add Connector
+                </button>
+              </div>
             </CardContent>
           </Card>
 

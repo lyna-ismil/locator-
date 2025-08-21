@@ -30,6 +30,7 @@ import TiltCard from "@/components/creative/tilt-card"
 import { Badge } from "@/components/ui/badge"
 import { apiFetch } from "@/lib/api"
 import { FaGoogle, FaFacebook } from "react-icons/fa"
+import { CONNECTOR_TYPES } from "@/app/shared/connectors"
 
 function passwordScore(pw: string) {
   let score = 0
@@ -129,86 +130,131 @@ export default function SignUpPage() {
     e.preventDefault()
     setError("")
     setSuccess("")
-    try {
-      if (userType === "driver") {
-        if (
-          !driverForm.firstName ||
-          !driverForm.lastName ||
-          !driverForm.email ||
-          !driverForm.password ||
-          !driverForm.carMake ||
-          !driverForm.carModel ||
-          !driverForm.primaryConnector || // <-- use this
-          !driverForm.batteryCapacity
-        ) {
-          setError("Please fill in all required fields, including vehicle details.")
-          return
-        }
+
+    if (userType === "driver") {
+      const email = driverForm.email.trim().toLowerCase()
+      const payloadMissing =
+        !driverForm.firstName.trim() ||
+        !driverForm.lastName.trim() ||
+        !email ||
+        !driverForm.password ||
+        !driverForm.carMake ||
+        !driverForm.carModel ||
+        !driverForm.primaryConnector ||
+        !driverForm.batteryCapacity
+      if (payloadMissing) {
+        setError("Please fill in all required fields, including vehicle details.")
+        return
+      }
+      try {
         await apiFetch("/car-owners/register", {
           method: "POST",
           body: JSON.stringify({
-            fullName: `${driverForm.firstName} ${driverForm.lastName}`,
-            email: driverForm.email,
+            fullName: `${driverForm.firstName.trim()} ${driverForm.lastName.trim()}`,
+            email,
             password: driverForm.password,
             vehicleDetails: {
-              make: driverForm.carMake,
-              model: driverForm.carModel,
+              make: driverForm.carMake.trim(),
+              model: driverForm.carModel.trim(),
               primaryConnector: driverForm.primaryConnector,
               batteryCapacity: Number(driverForm.batteryCapacity),
             },
           }),
         })
         setSuccess("Car owner account created!")
-        router.push("/sign-in")
-      } else {
-        if (
-          !ownerForm.stationName ||
-          !ownerForm.network ||
-          !ownerForm.email ||
-          !ownerForm.password
-        ) {
-          setError("Please fill in all required fields.")
-          return
-        }
-
-        // Map address fields from location to address object
-        const payload = {
-          stationName: ownerForm.stationName,
-          network: ownerForm.network,
-          email: ownerForm.email,
-          password: ownerForm.password,
-          ownerId: ownerForm.email, // Use email as ownerId for now
-          location: {
-            type: "Point",
-            coordinates: [
-              Number(ownerForm.location.coordinates[0]) || 0,
-              Number(ownerForm.location.coordinates[1]) || 0,
-            ],
-          },
-          address: {
-            street: ownerForm.location.address || "",
-            city: ownerForm.location.city || "",
-            state: ownerForm.location.state || "",
-            zipCode: ownerForm.location.zipCode || "",
-          },
-        }
-
-        console.log("Submitting payload:", payload)
-
-        const res = await apiFetch("/stations", {
-          method: "POST",
-          body: JSON.stringify(payload),
-        })
-        if (res && res._id) {
-          localStorage.setItem("ownerId", res._id)
-        }
-        setSuccess("Station owner account created!")
-        router.push("/sign-in")
+        setTimeout(() => router.push("/sign-in"), 600)
+      } catch (err: any) {
+        setError(err?.message || "Driver signup failed.")
       }
-    } catch (err: any) {
-      setError(err.message)
+      return
+    }
+
+    // ---- Station Owner Branch ----
+    const email = ownerForm.email.trim().toLowerCase()
+    const stationName = ownerForm.stationName.trim()
+    const network = (ownerForm.network || "Independent").trim()
+    const pwd = ownerForm.password
+    const lng = ownerForm.location.coordinates[0]
+    const lat = ownerForm.location.coordinates[1]
+
+    const missing: string[] = []
+    if (!stationName) missing.push("stationName")
+    if (!network) missing.push("network")
+    if (!email) missing.push("email")
+    if (!pwd) missing.push("password")
+    if (!lng) missing.push("longitude")
+    if (!lat) missing.push("latitude")
+
+    if (missing.length) {
+      setError("Missing: " + missing.join(", "))
+      return
+    }
+
+    const lngNum = Number(lng)
+    const latNum = Number(lat)
+    if (!isFinite(lngNum) || !isFinite(latNum)) {
+      setError("Coordinates must be numeric.")
+      return
+    }
+
+    const payload = {
+      stationName,
+      network,
+      email,
+      password: pwd,
+      ownerId: email,
+      location: {
+        type: "Point",
+        coordinates: [lngNum, latNum],
+      },
+      address: {
+        street: ownerForm.location.address?.trim() || "",
+        city: ownerForm.location.city?.trim() || "",
+        state: ownerForm.location.state?.trim() || "",
+        zipCode: ownerForm.location.zipCode?.trim() || "",
+      },
+    }
+
+    try {
+      const res = await fetch(
+        (process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5000").replace(/\/$/, "") +
+          "/stations/signup",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      )
+
+      const ct = res.headers.get("content-type") || ""
+      let data: any = null
+      if (ct.includes("application/json")) data = await res.json()
+      else {
+        const txt = await res.text()
+        setError("Unexpected response")
+        console.error("Owner signup non-JSON:", txt.slice(0, 300))
+        return
+      }
+
+      if (!res.ok) {
+        setError(data?.msg || "Owner signup failed.")
+        return
+      }
+
+      setSuccess("Owner account created.")
+      localStorage.setItem("ownerId", data._id || payload.ownerId)
+      setTimeout(() => router.push("/sign-in"), 600)
+    } catch (e: any) {
+      console.error("[ownerSignup] error:", e)
+      setError(e.message || "Network error")
     }
   }
+
+  useEffect(() => {
+    if (!ownerForm.network) {
+      setOwnerForm(o => ({ ...o, network: "Independent" }))
+    }
+  }, [])
 
   return (
     <div className="min-h-screen relative">
@@ -495,10 +541,11 @@ export default function SignUpPage() {
                                     <SelectValue placeholder="Select connector" />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    <SelectItem value="Type 2">Type 2</SelectItem>
-                                    <SelectItem value="CCS">CCS</SelectItem>
-                                    <SelectItem value="CHAdeMO">CHAdeMO</SelectItem>
-                                    <SelectItem value="Tesla Supercharger">Tesla Supercharger</SelectItem>
+                                    {CONNECTOR_TYPES.map((type) => (
+                                      <SelectItem key={type} value={type}>
+                                        {type}
+                                      </SelectItem>
+                                    ))}
                                   </SelectContent>
                                 </Select>
                               </div>
@@ -690,6 +737,18 @@ export default function SignUpPage() {
                                 value={ownerForm.stationName}
                                 onChange={(e) => setOwnerForm({ ...ownerForm, stationName: e.target.value })}
                                 placeholder="Main Street Station"
+                                className="h-11 bg-white border-gray-200"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="network" className="text-sm font-medium text-gray-700">
+                                Network <span className="text-red-500">*</span>
+                              </Label>
+                              <Input
+                                id="network"
+                                value={ownerForm.network}
+                                onChange={(e) => setOwnerForm({ ...ownerForm, network: e.target.value })}
+                                placeholder="e.g., Independent, ChargePoint"
                                 className="h-11 bg-white border-gray-200"
                               />
                             </div>
