@@ -10,22 +10,27 @@ import { AlertTriangle, Clock, CheckCircle, MessageSquare, User, Calendar, Image
 import TiltCard from "@/components/creative/tilt-card"
 import { PhotoUpload } from "./PhotoUpload"
 
+type ReclamationCategory =
+  | "Incorrect Station Info"
+  | "Broken Charger"
+  | "Billing Issue"
+  | "General Feedback"
+
+type ReclamationStatus = "Open" | "In Progress" | "Resolved" | "Closed"
+
 interface Reclamation {
   _id: string
-  userId: string
-  stationId: string
-  stationName: string
-  customerName: string
-  customerEmail: string
-  subject: string
+  submittedBy?: string // ObjectId (string) of user who submitted
+  relatedStation?: string // ObjectId (string) of station
+  category: ReclamationCategory
+  title: string
   description: string
-  category: "technical" | "billing" | "service" | "other"
-  priority: "low" | "medium" | "high" | "urgent"
-  status: "pending" | "in-progress" | "resolved" | "closed"
-  photos?: string[]
+  status: ReclamationStatus
+  adminNotes?: string
   createdAt: string
   updatedAt: string
-  response?: string
+  // optional fields kept for compatibility if you later extend backend
+  photos?: string[]
   responsePhotos?: string[]
 }
 
@@ -37,64 +42,54 @@ interface ReclamationListProps {
 export function ReclamationList({ reclamations, onDataChange }: ReclamationListProps) {
   const [selectedReclamation, setSelectedReclamation] = useState<Reclamation | null>(null)
   const [responseMessage, setResponseMessage] = useState("")
-  const [newStatus, setNewStatus] = useState("")
+  const [newStatus, setNewStatus] = useState<ReclamationStatus | "">("")
   const [responsePhotos, setResponsePhotos] = useState<string[]>([])
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: ReclamationStatus) => {
     switch (status) {
-      case "pending":
+      case "Open":
         return "bg-yellow-100 text-yellow-800"
-      case "in-progress":
+      case "In Progress":
         return "bg-blue-100 text-blue-800"
-      case "resolved":
+      case "Resolved":
         return "bg-green-100 text-green-800"
-      case "closed":
+      case "Closed":
         return "bg-gray-100 text-gray-800"
       default:
         return "bg-gray-100 text-gray-800"
     }
   }
 
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case "urgent":
-        return "bg-red-100 text-red-800"
-      case "high":
-        return "bg-orange-100 text-orange-800"
-      case "medium":
-        return "bg-yellow-100 text-yellow-800"
-      case "low":
-        return "bg-green-100 text-green-800"
-      default:
-        return "bg-gray-100 text-gray-800"
-    }
-  }
-
-  const getCategoryIcon = (category: string) => {
+  const getCategoryIcon = (category: ReclamationCategory) => {
     switch (category) {
-      case "technical":
+      case "Incorrect Station Info":
         return <AlertTriangle className="h-4 w-4" />
-      case "billing":
+      case "Broken Charger":
+        return <AlertTriangle className="h-4 w-4" />
+      case "Billing Issue":
         return <Clock className="h-4 w-4" />
-      case "service":
-        return <User className="h-4 w-4" />
+      case "General Feedback":
+        return <MessageSquare className="h-4 w-4" />
       default:
         return <MessageSquare className="h-4 w-4" />
     }
   }
 
+  const BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5000").replace(/\/$/, "")
+
   const handleUpdateReclamation = async () => {
     if (!selectedReclamation) return
 
     try {
-      const res = await fetch(`http://localhost:5000/reclamations/${selectedReclamation._id}`, {
+      const res = await fetch(`${BASE}/reclamations/${selectedReclamation._id}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
           status: newStatus || selectedReclamation.status,
-          response: responseMessage,
+          adminNotes: responseMessage || selectedReclamation.adminNotes,
+          // keep responsePhotos optional for future use
           responsePhotos: responsePhotos.length > 0 ? responsePhotos : undefined,
           updatedAt: new Date().toISOString(),
         }),
@@ -106,13 +101,16 @@ export function ReclamationList({ reclamations, onDataChange }: ReclamationListP
         setNewStatus("")
         setResponsePhotos([])
         onDataChange()
+      } else {
+        const err = await res.json().catch(() => null)
+        console.error("Update failed", err || res.statusText)
       }
     } catch (error) {
       console.error("Error updating reclamation:", error)
     }
   }
 
-  if (reclamations.length === 0) {
+  if (!reclamations || reclamations.length === 0) {
     return (
       <TiltCard className="bg-white/90 border border-gray-100 shadow-xl">
         <Card className="border-none shadow-none">
@@ -136,10 +134,11 @@ export function ReclamationList({ reclamations, onDataChange }: ReclamationListP
                 <div className="flex items-center gap-3">
                   <div className="p-2 rounded-lg bg-red-100">{getCategoryIcon(reclamation.category)}</div>
                   <div>
-                    <CardTitle className="text-lg">{reclamation.subject}</CardTitle>
+                    <CardTitle className="text-lg">{reclamation.title}</CardTitle>
                     <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
                       <User className="h-3 w-3" />
-                      {reclamation.customerName}
+                      {/* submittedBy is an id; show shortened id */}
+                      {reclamation.submittedBy ? `${reclamation.submittedBy.slice(0, 8)}...` : "Customer"}
                       <span>•</span>
                       <Calendar className="h-3 w-3" />
                       {new Date(reclamation.createdAt).toLocaleDateString()}
@@ -147,7 +146,6 @@ export function ReclamationList({ reclamations, onDataChange }: ReclamationListP
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Badge className={getPriorityColor(reclamation.priority)}>{reclamation.priority}</Badge>
                   <Badge className={getStatusColor(reclamation.status)}>{reclamation.status}</Badge>
                 </div>
               </div>
@@ -156,7 +154,7 @@ export function ReclamationList({ reclamations, onDataChange }: ReclamationListP
               <div>
                 <p className="text-gray-700 mb-2">{reclamation.description}</p>
                 <div className="text-sm text-gray-500">
-                  <strong>Station:</strong> {reclamation.stationName}
+                  <strong>Station:</strong> {reclamation.relatedStation ?? "N/A"}
                 </div>
               </div>
 
@@ -180,13 +178,13 @@ export function ReclamationList({ reclamations, onDataChange }: ReclamationListP
                 </div>
               )}
 
-              {reclamation.response && (
+              {reclamation.adminNotes && (
                 <div className="bg-green-50 p-3 rounded-lg space-y-3">
                   <div className="flex items-center gap-2 mb-1">
                     <MessageSquare className="h-4 w-4 text-green-600" />
-                    <span className="text-sm font-medium text-green-800">Your Response</span>
+                    <span className="text-sm font-medium text-green-800">Admin Notes</span>
                   </div>
-                  <p className="text-sm text-green-700">{reclamation.response}</p>
+                  <p className="text-sm text-green-700">{reclamation.adminNotes}</p>
 
                   {reclamation.responsePhotos && reclamation.responsePhotos.length > 0 && (
                     <div>
@@ -217,7 +215,8 @@ export function ReclamationList({ reclamations, onDataChange }: ReclamationListP
                   onClick={() => {
                     setSelectedReclamation(reclamation)
                     setNewStatus(reclamation.status)
-                    setResponsePhotos([])
+                    setResponsePhotos(reclamation.responsePhotos ?? [])
+                    setResponseMessage(reclamation.adminNotes ?? "")
                   }}
                 >
                   <MessageSquare className="h-4 w-4 mr-2" />
@@ -235,26 +234,26 @@ export function ReclamationList({ reclamations, onDataChange }: ReclamationListP
             <Card className="border-none shadow-none">
               <CardHeader>
                 <CardTitle>Respond to Reclamation</CardTitle>
-                <p className="text-sm text-gray-600">{selectedReclamation.subject}</p>
+                <p className="text-sm text-gray-600">{selectedReclamation.title}</p>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
                   <label className="text-sm font-medium mb-2 block">Update Status</label>
-                  <Select value={newStatus} onValueChange={setNewStatus}>
+                  <Select value={newStatus} onValueChange={(v) => setNewStatus(v as ReclamationStatus)}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="in-progress">In Progress</SelectItem>
-                      <SelectItem value="resolved">Resolved</SelectItem>
-                      <SelectItem value="closed">Closed</SelectItem>
+                      <SelectItem value="Open">Open</SelectItem>
+                      <SelectItem value="In Progress">In Progress</SelectItem>
+                      <SelectItem value="Resolved">Resolved</SelectItem>
+                      <SelectItem value="Closed">Closed</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
 
                 <div>
-                  <label className="text-sm font-medium mb-2 block">Response Message</label>
+                  <label className="text-sm font-medium mb-2 block">Response / Admin Notes</label>
                   <Textarea
                     value={responseMessage}
                     onChange={(e) => setResponseMessage(e.target.value)}

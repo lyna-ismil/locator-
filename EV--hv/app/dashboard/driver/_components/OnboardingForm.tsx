@@ -269,6 +269,8 @@ export default function OnboardingForm({ initialData, onComplete }: Props) {
             ? Number(form.vehicleDetails.batteryCapacityKWh)
             : undefined,
         },
+        // ensure adapters are passed in canonical form
+        additionalAdapters: selectedAdapters,
       }
 
       localStorage.setItem("driverVehicle", JSON.stringify(payload.vehicleDetails))

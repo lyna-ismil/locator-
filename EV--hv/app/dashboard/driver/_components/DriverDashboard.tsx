@@ -1,6 +1,6 @@
 "use client"
-import type React from "react"
-import { useState, useEffect } from "react"
+import React, { useState } from "react"
+import { useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
@@ -106,16 +106,23 @@ export default function DriverDashboard({
   user,
   favorites,
   setFavorites,
+  stations = [], // array of station objects passed from parent
 }: {
-  user: CarOwner
+  user: any
   favorites: string[]
   setFavorites: (ids: string[]) => void
+  stations?: { _id: string; stationName?: string; address?: any }[]
 }) {
   const [history, setHistory] = useState<Reservation[]>([])
   const [reclamations, setReclamations] = useState<Reclamation[]>([])
   const [reviewText, setReviewText] = useState("")
   const [reviewRating, setReviewRating] = useState(5)
-  const [reclamationDescription, setReclamationDescription] = useState("")
+  const [reclamationForm, setReclamationForm] = useState({
+    stationId: "",
+    title: "",
+    category: "General Feedback",
+    description: "",
+  })
   const [editingProfile, setEditingProfile] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [profileData, setProfileData] = useState({
@@ -160,18 +167,34 @@ export default function DriverDashboard({
   const totalEnergy = history.reduce((sum, session) => sum + (session.energyDelivered || 0), 0)
   const avgRating = 4.7 // Mock average rating
 
-  function handleReclamationSubmit(e: React.FormEvent) {
+  async function handleReclamationSubmit(e: React.FormEvent) {
     e.preventDefault()
-    const newReclamation: Reclamation = {
-      stationId: "",
-      category: "General",
-      description: reclamationDescription,
-      contactEmail: user.email,
-      status: "open",
+    if (!reclamationForm.title || !reclamationForm.description || !reclamationForm.stationId) {
+      alert("Please select a station and fill out all fields.")
+      return
     }
-    api.submitReclamation(newReclamation)
-    setReclamations([...reclamations, newReclamation])
-    setReclamationDescription("")
+
+    try {
+      const newReclamation = {
+        submittedBy: user.id, // backend expects user id
+        relatedStation: reclamationForm.stationId, // station identifier
+        category: reclamationForm.category,
+        title: reclamationForm.title,
+        description: reclamationForm.description,
+        status: "Open",
+        createdAt: new Date().toISOString(),
+      }
+
+      const saved = await api.submitReclamation(newReclamation)
+      // append saved reclamation returned by backend (or fallback to local object)
+      setReclamations((prev) => [...prev, saved || newReclamation])
+
+      // reset form
+      setReclamationForm({ stationId: "", title: "", category: "General Feedback", description: "" })
+    } catch (err) {
+      console.error("Failed to submit reclamation", err)
+      alert("Failed to submit report. Please try again.")
+    }
   }
 
   function handleReviewSubmit(e: React.FormEvent) {
@@ -812,26 +835,78 @@ export default function DriverDashboard({
               >
                 <div className="flex items-center gap-2 mb-4">
                   <AlertTriangle className="w-5 h-5 text-orange-500" />
-                  <h3 className="font-semibold text-gray-800">Report Issues</h3>
+                  <h3 className="font-semibold text-gray-800">Report an Issue</h3>
                 </div>
                 <Card>
                   <CardContent className="p-4">
                     <form onSubmit={handleReclamationSubmit} className="space-y-4">
                       <div className="space-y-2">
+                        <Label htmlFor="station-select">Station</Label>
+                        <Select
+                          value={reclamationForm.stationId}
+                          onValueChange={(value) => setReclamationForm({ ...reclamationForm, stationId: value })}
+                        >
+                          <SelectTrigger id="station-select">
+                            <SelectValue placeholder="Select a station to report" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {history.map((session) => (
+                              <SelectItem key={session.id} value={session.stationId}>
+                                {session.stationId}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="issue-title">Title</Label>
+                          <Input
+                            id="issue-title"
+                            value={reclamationForm.title}
+                            onChange={(e) => setReclamationForm({ ...reclamationForm, title: e.target.value })}
+                            placeholder="e.g., Charger not working"
+                            required
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="issue-category">Category</Label>
+                          <Select
+                            value={reclamationForm.category}
+                            onValueChange={(value) => setReclamationForm({ ...reclamationForm, category: value })}
+                          >
+                            <SelectTrigger id="issue-category">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="Incorrect Station Info">Incorrect Info</SelectItem>
+                              <SelectItem value="Broken Charger">Broken Charger</SelectItem>
+                              <SelectItem value="Billing Issue">Billing Issue</SelectItem>
+                              <SelectItem value="General Feedback">General Feedback</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
                         <Label htmlFor="issue-description">Describe the issue</Label>
                         <textarea
                           id="issue-description"
-                          value={reclamationDescription}
-                          onChange={(e) => setReclamationDescription(e.target.value)}
+                          value={reclamationForm.description}
+                          onChange={(e) => setReclamationForm({ ...reclamationForm, description: e.target.value })}
                           className="w-full p-3 border border-gray-200 rounded-lg focus:border-emerald-500 focus:ring-emerald-500 resize-none"
                           rows={4}
-                          placeholder="Please describe the issue you encountered..."
+                          placeholder="Please provide details about the issue..."
+                          required
                         />
                       </div>
+
                       <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700">
                         Submit Report
                       </Button>
                     </form>
+
                     {reclamations.length > 0 && (
                       <div className="mt-4 space-y-2">
                         <h4 className="font-semibold text-gray-700">Submitted Issues</h4>

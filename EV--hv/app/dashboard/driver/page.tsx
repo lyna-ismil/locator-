@@ -493,6 +493,7 @@ export default function DriverPage() {
             user={user}
             favorites={favorites}
             setFavorites={safeUpdateFavorites}
+            stations={stations} // <- PASS stations array here
           />
         )
     }

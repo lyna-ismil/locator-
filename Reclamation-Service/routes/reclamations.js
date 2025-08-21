@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Reclamation = require('../models/Reclamation');
+const mongoose = require('mongoose');
 
 /*
  * @route   GET /health
@@ -17,28 +18,27 @@ router.get('/health', (req, res) => {
  * @access  Private (for authenticated users)
  */
 router.post('/', async (req, res) => {
-    try {
-        const { submittedBy, relatedStation, category, title, description } = req.body;
+  try {
+    const payload = { ...req.body }
 
-        // Basic validation
-        if (!submittedBy || !category || !title || !description) {
-            return res.status(400).json({ msg: 'SubmittedBy, category, title, and description are required.' });
-        }
+    // sanitize relatedStation: if it's a 24-char hex string, convert to ObjectId
+    if (payload.relatedStation && typeof payload.relatedStation === 'string') {
+      const s = payload.relatedStation.trim()
+      if (/^[0-9a-fA-F]{24}$/.test(s)) {
+        payload.relatedStation = mongoose.Types.ObjectId(s)
+      } else {
+        // keep string (name) — stored as string in model (mixed)
+        payload.relatedStation = s
+      }
+    }
 
-        const newReclamation = new Reclamation({
-            submittedBy,
-            relatedStation,
-            category,
-            title,
-            description
-        });
-
-        await newReclamation.save();
-        res.status(201).json(newReclamation);
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
+    const rec = new Reclamation(payload)
+    await rec.save()
+    res.status(201).json(rec)
+  } catch (err) {
+    console.error('Create reclamation error', err)
+    res.status(500).json({ msg: 'Reclamation creation failed', error: err.message })
+  }
 });
 
 /*
