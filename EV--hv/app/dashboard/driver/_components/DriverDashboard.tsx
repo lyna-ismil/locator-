@@ -1,7 +1,6 @@
 "use client"
 import type React from "react"
-import { useState } from "react"
-import { useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
@@ -108,7 +107,7 @@ const api = {
     return await res.json()
   },
   updateProfile: async (userId: string, data: any) => {
-    const res = await fetch(`${BASE}/car-owners/${userId}`, {
+    const res = await fetch(`${BASE}/car-owners/profile/${userId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -132,16 +131,43 @@ const api = {
   },
 }
 
+// Optional: stronger typing for editable profile
+interface EditableProfile {
+  fullName: string
+  email: string
+  phone?: string
+  location?: string
+  photoUrl?: string | null
+  vehicleDetails: {
+    id?: string
+    make: string
+    model: string
+    year?: number
+    batteryCapacityKWh?: number
+    maxChargingSpeed?: number
+    primaryConnector: string
+    adapters: string[]
+  }
+  preferences: {
+    preferredNetworks: string[]
+    requiredAmenities: string[]
+  }
+}
+
 export default function DriverDashboard({
   user,
   favorites,
   setFavorites,
-  stations = [], // array of station objects passed from parent
+  stations = [],
+  activeView,
+  setActiveView,
 }: {
   user: any
   favorites: string[]
   setFavorites: (ids: string[]) => void
   stations?: { _id: string; stationName?: string; address?: any }[]
+  activeView: string
+  setActiveView: (view: string) => void
 }) {
   const [history, setHistory] = useState<Reservation[]>([])
   const [reclamations, setReclamations] = useState<Reclamation[]>([])
@@ -155,13 +181,33 @@ export default function DriverDashboard({
   })
   const [editingProfile, setEditingProfile] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
-  const [profileData, setProfileData] = useState({
-    fullName: user.fullName,
-    email: user.email,
-    phone: "+216 12 345 678",
-    location: "Tunis, Tunisia",
+  // Unified editable profile state (personal + vehicle + preferences)
+  const [editableProfile, setEditableProfile] = useState<EditableProfile>({
+    fullName: user.fullName || "",
+    email: user.email || "",
+    phone: (user.phone as string) || "+216 12 345 678",
+    location: (user.location as string) || "Tunis, Tunisia",
+    photoUrl: user.photoUrl || null,
+    vehicleDetails: {
+      id: user.vehicleDetails?.id,
+      make: user.vehicleDetails?.make || "",
+      model: user.vehicleDetails?.model || "",
+      year: user.vehicleDetails?.year,
+      batteryCapacityKWh: user.vehicleDetails?.batteryCapacityKWh,
+      maxChargingSpeed: user.vehicleDetails?.maxChargingSpeed,
+      primaryConnector: (user.vehicleDetails?.primaryConnector ||
+        (user.vehicle?.primaryConnector as string) ||
+        "CCS"),
+      adapters:
+        user.vehicleDetails?.adapters ||
+        (user.vehicle?.adapters as string[]) ||
+        [],
+    },
+    preferences: {
+      preferredNetworks: user.preferences?.preferredNetworks || [],
+      requiredAmenities: user.preferences?.requiredAmenities || [],
+    },
   })
-  const [vehicleData, setVehicleData] = useState(user.vehicleDetails)
   const [settings, setSettings] = useState({
     notifications: {
       chargingComplete: true,
@@ -181,11 +227,8 @@ export default function DriverDashboard({
       autoReserve: false,
     },
   })
-  const [activeTab, setActiveTab] = useState("overview")
-  const [editingVehicle, setEditingVehicle] = useState(false)
-  const [tempVehicle, setTempVehicle] = useState<VehicleDetails>(
-    user?.vehicle || { make: "", model: "", primaryConnector: "CCS", adapters: [] },
-  )
+  const [savingSettings, setSavingSettings] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     api.getHistory(user.email).then(setHistory)
@@ -238,72 +281,113 @@ export default function DriverDashboard({
     setReviewText("")
   }
 
-  async function updateVehicle(v: VehicleDetails) {
-    try {
-      // Persist to backend then update local state
-      if (user?.id) {
-        // send vehicle details under a field your backend expects (vehicleDetails)
-        await api.updateProfile(user.id, { vehicleDetails: v })
-      } else {
-        // fallback: keep in localStorage for offline dev
-        localStorage.setItem("driverVehicle", JSON.stringify(v))
-      }
-
-      setVehicleData(v) // update local UI state
-      setEditingVehicle(false)
-    } catch (err) {
-      console.error("Failed to update vehicle", err)
-      // keep UI responsive
-      setVehicleData(v)
-      setEditingVehicle(false)
+  function handlePhotoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith("image/")) return
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      setEditableProfile(p => ({ ...p, photoUrl: reader.result as string }))
     }
+    reader.readAsDataURL(file)
   }
 
-  // Save profile changes to backend
+  // Single save for the whole editable profile
   async function handleProfileSave() {
     if (!user?.id) {
       alert("User ID not found, please log in again.")
       return
     }
     try {
-      await api.updateProfile(user.id, profileData)
+     // Build minimal diff payload
+     const base = {
+       fullName: editableProfile.fullName,
+       vehicleDetails: editableProfile.vehicleDetails,
+       preferences: editableProfile.preferences,
+     } as any
+     if (editableProfile.email && editableProfile.email !== user.email) base.email = editableProfile.email
+     if (editableProfile.photoUrl && editableProfile.photoUrl !== user.photoUrl) base.photoUrl = editableProfile.photoUrl
+
+     await api.updateProfile(user.id, base)
       setEditingProfile(false)
+      try {
+       const merged = { ...user, ...base }
+        localStorage.setItem("driverUser", JSON.stringify(merged))
+      } catch {}
     } catch (err) {
       console.error("Failed to update profile", err)
       alert("Failed to save changes. Please try again.")
     }
   }
 
+  function handleSettingsChange<Category extends keyof typeof settings>(
+    category: Category,
+    key: keyof (typeof settings)[Category],
+    value: any,
+  ) {
+    setSettings(prev => ({
+      ...prev,
+      [category]: {
+        ...prev[category],
+        [key]: value,
+      },
+    }))
+  }
+
+  async function handleSaveSettings() {
+    if (!user?.id) {
+      alert("User ID not found. Please log in again.")
+      return
+    }
+    try {
+      setSavingSettings(true)
+      // Persist only the user-facing preferences subset to backend (adjust schema if you want notifications/privacy saved too)
+      await api.updateProfile(user.id, {
+        preferences: {
+          ...editableProfile.preferences,
+          ui: {
+            language: settings.preferences.language,
+            currency: settings.preferences.currency,
+            theme: settings.preferences.theme,
+            autoReserve: settings.preferences.autoReserve,
+          },
+        },
+      })
+      alert("Settings saved successfully!")
+    } catch (err) {
+      console.error("Failed to save settings", err)
+      alert("Failed to save settings. Please try again.")
+    } finally {
+      setSavingSettings(false)
+    }
+  }
+
   return (
     <div className="h-full bg-gray-50 overflow-y-auto">
-      <Tabs defaultValue="overview" className="w-full">
+      <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
         <div className="bg-white border-b border-gray-200 px-6 py-4">
           <TabsList className="grid w-full grid-cols-6 bg-gray-100">
-            <TabsTrigger value="overview" className="flex items-center gap-2" onClick={() => setActiveTab("overview")}>
+            <TabsTrigger value="overview" className="flex items-center gap-2">
               <TrendingUp className="w-4 h-4" />
               Overview
             </TabsTrigger>
-            <TabsTrigger value="profile" className="flex items-center gap-2" onClick={() => setActiveTab("profile")}>
+            <TabsTrigger value="profile" className="flex items-center gap-2">
               <User className="w-4 h-4" />
               Profile
             </TabsTrigger>
-            <TabsTrigger value="history" className="flex items-center gap-2" onClick={() => setActiveTab("history")}>
+            <TabsTrigger value="history" className="flex items-center gap-2">
               <Clock className="w-4 h-4" />
               History
             </TabsTrigger>
-            <TabsTrigger
-              value="favorites"
-              className="flex items-center gap-2"
-              onClick={() => setActiveTab("favorites")}
-            >
+            <TabsTrigger value="favorites" className="flex items-center gap-2">
               <Heart className="w-4 h-4" />
               Favorites
             </TabsTrigger>
-            <TabsTrigger value="support" className="flex items-center gap-2" onClick={() => setActiveTab("support")}>
+            <TabsTrigger value="support" className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4" />
               Support
             </TabsTrigger>
-            <TabsTrigger value="settings" className="flex items-center gap-2" onClick={() => setActiveTab("settings")}>
+            <TabsTrigger value="settings" className="flex items-center gap-2">
               <Settings className="w-4 h-4" />
               Settings
             </TabsTrigger>
@@ -312,7 +396,7 @@ export default function DriverDashboard({
 
         <div className="p-6">
           <AnimatePresence mode="wait">
-            {activeTab === "overview" && (
+            {activeView === "overview" && (
               <motion.div
                 key="overview"
                 initial={{ opacity: 0, y: 16 }}
@@ -433,7 +517,7 @@ export default function DriverDashboard({
                 </Card>
               </motion.div>
             )}
-            {activeTab === "profile" && (
+            {activeView === "profile" && (
               <motion.div
                 key="profile"
                 initial={{ opacity: 0, y: 16 }}
@@ -446,38 +530,70 @@ export default function DriverDashboard({
                   <CardContent className="p-6">
                     <div className="flex items-center space-x-6">
                       <div className="relative">
-                        <div className="w-24 h-24 bg-gradient-to-br from-emerald-500 to-lime-500 rounded-full flex items-center justify-center text-white text-2xl font-bold">
-                          {user.fullName.charAt(0)}
-                        </div>
-                        <Button
-                          size="sm"
-                          className="absolute -bottom-2 -right-2 w-8 h-8 rounded-full p-0 bg-white border-2 border-gray-200 text-gray-600 hover:bg-gray-50"
-                        >
-                          <Camera className="w-4 h-4" />
-                        </Button>
+                        {editableProfile.photoUrl ? (
+                          <img
+                            src={editableProfile.photoUrl}
+                            alt="Profile"
+                            className="w-24 h-24 rounded-full object-cover border-4 border-white shadow-lg"
+                          />
+                        ) : (
+                          <img
+                            src={`https://ui-avatars.com/api/?name=${encodeURIComponent(
+                              user.fullName || "User",
+                            )}&background=random`}
+                            alt="Profile"
+                            className="w-24 h-24 rounded-full object-cover border-4 border-white shadow-lg"
+                          />
+                        )}
                       </div>
                       <div className="flex-1">
                         <div className="flex items-center justify-between mb-2">
-                          <h3 className="text-2xl font-bold text-gray-900">{profileData.fullName}</h3>
+                          <h3 className="text-2xl font-bold text-gray-900">{editableProfile.fullName}</h3>
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => setEditingProfile(!editingProfile)}
+                            onClick={() => {
+                              if (editingProfile) {
+                                // cancel: reset to original snapshot
+                                setEditableProfile({
+                                  fullName: user.fullName || "",
+                                  email: user.email || "",
+                                  phone: user.phone || "+216 12 345 678",
+                                  location: user.location || "Tunis, Tunisia",
+                                  photoUrl: user.photoUrl || null,
+                                  vehicleDetails:
+                                    user.vehicleDetails || {
+                                      make: "",
+                                      model: "",
+                                      year: undefined,
+                                      primaryConnector: "CCS",
+                                      adapters: [],
+                                      maxChargingSpeed: undefined,
+                                    },
+                                  preferences: user.preferences || {
+                                    preferredNetworks: [],
+                                    requiredAmenities: [],
+                                  },
+                                })
+                              }
+                              setEditingProfile(!editingProfile)
+                            }}
                             className="flex items-center space-x-2"
                           >
                             <Edit3 className="w-4 h-4" />
-                            <span>{editingProfile ? "Cancel" : "Edit"}</span>
+                            <span>{editingProfile ? "Cancel" : "Edit Profile"}</span>
                           </Button>
                         </div>
                         <div className="space-y-1 text-gray-600">
                           <div className="flex items-center space-x-2">
                             <MapPin className="w-4 h-4" />
-                            <span>{profileData.location}</span>
+                            <span>{editableProfile.location}</span>
                           </div>
                           <div className="flex items-center space-x-2">
                             <Car className="w-4 h-4" />
                             <span>
-                              {vehicleData.make} {vehicleData.model} ({vehicleData.year})
+                              {editableProfile.vehicleDetails?.make} {editableProfile.vehicleDetails?.model}{" "}
+                              {editableProfile.vehicleDetails?.year && `(${editableProfile.vehicleDetails.year})`}
                             </span>
                           </div>
                         </div>
@@ -497,10 +613,10 @@ export default function DriverDashboard({
                         <Label htmlFor="fullName">Full Name</Label>
                         <Input
                           id="fullName"
-                          value={profileData.fullName}
-                          onChange={(e) => setProfileData({ ...profileData, fullName: e.target.value })}
+                          value={editableProfile.fullName}
+                          onChange={(e) => setEditableProfile((p: any) => ({ ...p, fullName: e.target.value }))}
                           disabled={!editingProfile}
-                          className={editingProfile ? "" : "bg-gray-50"}
+                          className={!editingProfile ? "bg-gray-50" : ""}
                         />
                       </div>
                       <div className="space-y-2">
@@ -508,43 +624,33 @@ export default function DriverDashboard({
                         <Input
                           id="email"
                           type="email"
-                          value={profileData.email}
-                          onChange={(e) => setProfileData({ ...profileData, email: e.target.value })}
+                          value={editableProfile.email}
+                          onChange={(e) => setEditableProfile((p: any) => ({ ...p, email: e.target.value }))}
                           disabled={!editingProfile}
-                          className={editingProfile ? "" : "bg-gray-50"}
+                          className={!editingProfile ? "bg-gray-50" : ""}
                         />
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="phone">Phone Number</Label>
                         <Input
                           id="phone"
-                          value={profileData.phone}
-                          onChange={(e) => setProfileData({ ...profileData, phone: e.target.value })}
+                          value={editableProfile.phone}
+                          onChange={(e) => setEditableProfile((p: any) => ({ ...p, phone: e.target.value }))}
                           disabled={!editingProfile}
-                          className={editingProfile ? "" : "bg-gray-50"}
+                          className={!editingProfile ? "bg-gray-50" : ""}
                         />
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="location">Location</Label>
                         <Input
                           id="location"
-                          value={profileData.location}
-                          onChange={(e) => setProfileData({ ...profileData, location: e.target.value })}
+                          value={editableProfile.location}
+                          onChange={(e) => setEditableProfile((p: any) => ({ ...p, location: e.target.value }))}
                           disabled={!editingProfile}
-                          className={editingProfile ? "" : "bg-gray-50"}
+                          className={!editingProfile ? "bg-gray-50" : ""}
                         />
                       </div>
                     </div>
-                    {editingProfile && (
-                      <div className="flex space-x-3 pt-4">
-                        <Button onClick={handleProfileSave} className="bg-emerald-600 hover:bg-emerald-700">
-                          Save Changes
-                        </Button>
-                        <Button variant="outline" onClick={() => setEditingProfile(false)}>
-                          Cancel
-                        </Button>
-                      </div>
-                    )}
                   </CardContent>
                 </Card>
 
@@ -560,102 +666,158 @@ export default function DriverDashboard({
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div className="space-y-2">
                         <Label>Make</Label>
-                        <Input value={vehicleData.make} disabled className="bg-gray-50" />
+                        <Input
+                          value={editableProfile.vehicleDetails?.make}
+                          disabled={!editingProfile}
+                          onChange={(e) =>
+                            setEditableProfile((p: any) => ({
+                              ...p,
+                              vehicleDetails: { ...p.vehicleDetails, make: e.target.value },
+                            }))
+                          }
+                          className={!editingProfile ? "bg-gray-50" : ""}
+                        />
                       </div>
                       <div className="space-y-2">
                         <Label>Model</Label>
-                        <Input value={vehicleData.model} disabled className="bg-gray-50" />
+                        <Input
+                          value={editableProfile.vehicleDetails?.model}
+                          disabled={!editingProfile}
+                          onChange={(e) =>
+                            setEditableProfile((p: any) => ({
+                              ...p,
+                              vehicleDetails: { ...p.vehicleDetails, model: e.target.value },
+                            }))
+                          }
+                          className={!editingProfile ? "bg-gray-50" : ""}
+                        />
                       </div>
                       <div className="space-y-2">
                         <Label>Year</Label>
-                        <Input value={vehicleData.year} disabled className="bg-gray-50" />
+                        <Input
+                          type="number"
+                          value={editableProfile.vehicleDetails?.year ?? ""}
+                          disabled={!editingProfile}
+                          onChange={(e) =>
+                            setEditableProfile((p: any) => ({
+                              ...p,
+                              vehicleDetails: {
+                                ...p.vehicleDetails,
+                                year: e.target.value ? Number(e.target.value) : undefined,
+                              },
+                            }))
+                          }
+                          className={!editingProfile ? "bg-gray-50" : ""}
+                        />
                       </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label>Primary Connector</Label>
-                        <Input value={vehicleData.primaryConnector} disabled className="bg-gray-50" />
+                        <Select
+                          value={editableProfile.vehicleDetails?.primaryConnector}
+                          onValueChange={(value) =>
+                            setEditableProfile((p: any) => ({
+                              ...p,
+                              vehicleDetails: { ...p.vehicleDetails, primaryConnector: value },
+                            }))
+                          }
+                          disabled={!editingProfile}
+                        >
+                          <SelectTrigger className={!editingProfile ? "bg-gray-50" : ""}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {CONNECTORS.map((c) => (
+                              <SelectItem key={c} value={c}>
+                                {c}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
                       <div className="space-y-2">
-                        <Label>Max Charging Speed</Label>
-                        <Input value={`${vehicleData.maxChargingSpeed} kW`} disabled className="bg-gray-50" />
+                        <Label>Max Charging Speed (kW)</Label>
+                        <Input
+                          type="number"
+                          value={editableProfile.vehicleDetails?.maxChargingSpeed ?? ""}
+                          disabled={!editingProfile}
+                          onChange={(e) =>
+                            setEditableProfile((p: any) => ({
+                              ...p,
+                              vehicleDetails: {
+                                ...p.vehicleDetails,
+                                maxChargingSpeed: e.target.value ? Number(e.target.value) : undefined,
+                              },
+                            }))
+                          }
+                          className={!editingProfile ? "bg-gray-50" : ""}
+                        />
                       </div>
                     </div>
-                    <Button variant="outline" className="w-full bg-transparent">
-                      Update Vehicle Information
-                    </Button>
-                  </CardContent>
-                </Card>
-
-                {/* Editable Vehicle Section */}
-                <div className="border rounded-lg p-4 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-semibold text-sm text-gray-700">Vehicle & Connectors</h3>
-                    <button
-                      className="text-xs text-emerald-600 hover:underline"
-                      onClick={() => setEditingVehicle((e) => !e)}
-                    >
-                      {editingVehicle ? "Done" : "Edit"}
-                    </button>
-                  </div>
-                  {!editingVehicle && user?.vehicle && (
-                    <div className="text-xs text-gray-600 space-y-1">
-                      <div>Primary: {user.vehicle.primaryConnector}</div>
-                      <div>Adapters: {user.vehicle.adapters?.length ? user.vehicle.adapters.join(", ") : "None"}</div>
-                    </div>
-                  )}
-                  {editingVehicle && (
-                    <div className="space-y-3">
-                      <select
-                        className="input text-xs"
-                        value={tempVehicle.primaryConnector}
-                        onChange={(e) =>
-                          setTempVehicle((v) => ({ ...v, primaryConnector: e.target.value as ConnectorType }))
-                        }
-                      >
-                        {CONNECTORS.map((c) => (
-                          <option key={c}>{c}</option>
-                        ))}
-                      </select>
-                      <div className="flex flex-wrap gap-1">
-                        {CONNECTORS.filter((c) => c !== tempVehicle.primaryConnector).map((c) => {
-                          const active = tempVehicle.adapters.includes(c)
+                    <div className="space-y-2">
+                      <Label>Adapters</Label>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {CONNECTORS.filter((c) => c !== editableProfile.vehicleDetails.primaryConnector).map((c) => {
+                          const active = editableProfile.vehicleDetails.adapters.includes(c)
                           return (
-                            <button
+                            <Button
                               key={c}
                               type="button"
+                              disabled={!editingProfile}
+                              variant={active ? "default" : "outline"}
+                              size="sm"
                               onClick={() =>
-                                setTempVehicle((v) => ({
-                                  ...v,
-                                  adapters: active ? v.adapters.filter((a) => a !== c) : [...v.adapters, c],
+                                editingProfile &&
+                                setEditableProfile((p: any) => ({
+                                  ...p,
+                                  vehicleDetails: {
+                                    ...p.vehicleDetails,
+                                    adapters: active
+                                      ? p.vehicleDetails.adapters.filter((a: string) => a !== c)
+                                      : [...p.vehicleDetails.adapters, c],
+                                  },
                                 }))
                               }
-                              className={`px-2 py-1 rounded text-[10px] border ${
-                                active
-                                  ? "bg-emerald-600 text-white border-emerald-600"
-                                  : "bg-gray-100 text-gray-600 border-gray-200"
-                              }`}
                             >
                               {c}
-                            </button>
+                            </Button>
                           )
                         })}
                       </div>
-                      <button
-                        type="button"
-                        className="text-xs bg-emerald-600 text-white px-3 py-1 rounded"
-                        onClick={async () => {
-                          await updateVehicle(tempVehicle)
-                        }}
-                      >
-                        Save Vehicle
-                      </button>
                     </div>
-                  )}
-                </div>
+                  </CardContent>
+                </Card>
+
+                {/* Save Changes */}
+                {editingProfile && (
+                  <div className="flex justify-end gap-4">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handlePhotoUpload}
+                    />
+                    <Button
+                      variant="outline"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex items-center gap-2"
+                    >
+                      <Camera className="w-4 h-4" />
+                      Upload Photo
+                    </Button>
+                    <Button
+                      onClick={handleProfileSave}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                    >
+                      Save Changes
+                    </Button>
+                  </div>
+                )}
               </motion.div>
             )}
-            {activeTab === "settings" && (
+            {activeView === "settings" && (
               <motion.div
                 key="settings"
                 initial={{ opacity: 0, y: 16 }}
@@ -679,12 +841,7 @@ export default function DriverDashboard({
                       </div>
                       <Switch
                         checked={settings.notifications.chargingComplete}
-                        onCheckedChange={(checked) =>
-                          setSettings({
-                            ...settings,
-                            notifications: { ...settings.notifications, chargingComplete: checked },
-                          })
-                        }
+                        onCheckedChange={(checked) => handleSettingsChange("notifications", "chargingComplete", checked)}
                       />
                     </div>
                     <Separator />
@@ -696,10 +853,7 @@ export default function DriverDashboard({
                       <Switch
                         checked={settings.notifications.reservationReminders}
                         onCheckedChange={(checked) =>
-                          setSettings({
-                            ...settings,
-                            notifications: { ...settings.notifications, reservationReminders: checked },
-                          })
+                          handleSettingsChange("notifications", "reservationReminders", checked)
                         }
                       />
                     </div>
@@ -711,12 +865,7 @@ export default function DriverDashboard({
                       </div>
                       <Switch
                         checked={settings.notifications.promotions}
-                        onCheckedChange={(checked) =>
-                          setSettings({
-                            ...settings,
-                            notifications: { ...settings.notifications, promotions: checked },
-                          })
-                        }
+                        onCheckedChange={(checked) => handleSettingsChange("notifications", "promotions", checked)}
                       />
                     </div>
                   </CardContent>
@@ -738,12 +887,7 @@ export default function DriverDashboard({
                       </div>
                       <Switch
                         checked={settings.privacy.shareLocation}
-                        onCheckedChange={(checked) =>
-                          setSettings({
-                            ...settings,
-                            privacy: { ...settings.privacy, shareLocation: checked },
-                          })
-                        }
+                        onCheckedChange={(checked) => handleSettingsChange("privacy", "shareLocation", checked)}
                       />
                     </div>
                     <Separator />
@@ -754,12 +898,7 @@ export default function DriverDashboard({
                       </div>
                       <Switch
                         checked={settings.privacy.shareChargingData}
-                        onCheckedChange={(checked) =>
-                          setSettings({
-                            ...settings,
-                            privacy: { ...settings.privacy, shareChargingData: checked },
-                          })
-                        }
+                        onCheckedChange={(checked) => handleSettingsChange("privacy", "shareChargingData", checked)}
                       />
                     </div>
                     <Separator />
@@ -778,7 +917,10 @@ export default function DriverDashboard({
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label>Language</Label>
-                        <Select value={settings.preferences.language}>
+                        <Select
+                          value={settings.preferences.language}
+                          onValueChange={(v) => handleSettingsChange("preferences", "language", v)}
+                        >
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
@@ -791,7 +933,10 @@ export default function DriverDashboard({
                       </div>
                       <div className="space-y-2">
                         <Label>Currency</Label>
-                        <Select value={settings.preferences.currency}>
+                        <Select
+                          value={settings.preferences.currency}
+                          onValueChange={(v) => handleSettingsChange("preferences", "currency", v)}
+                        >
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
@@ -803,11 +948,53 @@ export default function DriverDashboard({
                         </Select>
                       </div>
                     </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Theme</Label>
+                        <Select
+                          value={settings.preferences.theme}
+                          onValueChange={(v) => handleSettingsChange("preferences", "theme", v)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="light">Light</SelectItem>
+                            <SelectItem value="dark">Dark</SelectItem>
+                            <SelectItem value="system">System</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="flex items-center justify-between border rounded-lg p-3">
+                        <div>
+                          <div className="font-medium">Auto Reserve</div>
+                          <div className="text-xs text-gray-500">
+                            Automatically reserve a charger when you arrive
+                          </div>
+                        </div>
+                        <Switch
+                          checked={settings.preferences.autoReserve}
+                          onCheckedChange={(checked) =>
+                            handleSettingsChange("preferences", "autoReserve", checked)
+                          }
+                        />
+                      </div>
+                    </div>
                   </CardContent>
                 </Card>
+
+                <div className="flex justify-end pt-2">
+                  <Button
+                    onClick={handleSaveSettings}
+                    disabled={savingSettings}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-60"
+                  >
+                    {savingSettings ? "Saving..." : "Save Settings"}
+                  </Button>
+                </div>
               </motion.div>
             )}
-            {activeTab === "history" && (
+            {activeView === "history" && (
               <motion.div
                 key="history"
                 initial={{ opacity: 0, y: 16 }}
@@ -846,7 +1033,7 @@ export default function DriverDashboard({
                 )}
               </motion.div>
             )}
-            {activeTab === "favorites" && (
+            {activeView === "favorites" && (
               <motion.div
                 key="favorites"
                 initial={{ opacity: 0, y: 16 }}
@@ -877,7 +1064,7 @@ export default function DriverDashboard({
                 )}
               </motion.div>
             )}
-            {activeTab === "support" && (
+            {activeView === "support" && (
               <motion.div
                 key="support"
                 initial={{ opacity: 0, y: 16 }}

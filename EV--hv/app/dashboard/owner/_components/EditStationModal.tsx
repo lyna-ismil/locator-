@@ -79,6 +79,15 @@ export function EditStationModal({ station, onClose, onStationUpdated }: EditSta
     { id: "coffee", name: "Coffee Shop", icon: <Coffee className="h-5 w-5 text-emerald-600" /> },
   ]
 
+  const CONNECTOR_STATUS_OPTIONS =
+    (Array.isArray(CONNECTOR_STATUSES) && CONNECTOR_STATUSES.length
+      ? CONNECTOR_STATUSES
+      : ["Available", "In Use", "Offline", "Maintenance"]) as string[]
+
+  if (!Array.isArray(CONNECTOR_STATUSES)) {
+    console.warn("CONNECTOR_STATUSES is undefined; using fallback list.")
+  }
+
   const handleConnectorChange = (idx: number, field: string, value: any) => {
     setFormData((prev) => ({
       ...prev,
@@ -587,7 +596,7 @@ export function EditStationModal({ station, onClose, onStationUpdated }: EditSta
               )}
               <div className="space-y-3">
                 <h4 className="text-sm font-medium text-gray-700">Connectors</h4>
-                {formData.connectors.map((c:any, i:number) => (
+                {(formData.connectors || []).map((c:any, i:number) => (
                   <div key={`${c._id || c.type}-${i}`} className="grid md:grid-cols-6 gap-2 items-center bg-gray-50 p-3 rounded">
                     <select
                       className="input"
@@ -639,7 +648,11 @@ export function EditStationModal({ station, onClose, onStationUpdated }: EditSta
                         })
                       }
                     >
-                      {CONNECTOR_STATUSES.map(s => <option key={s}>{s}</option>)}
+                      {CONNECTOR_STATUS_OPTIONS.map(s => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
                     </select>
                     <button
                       type="button"

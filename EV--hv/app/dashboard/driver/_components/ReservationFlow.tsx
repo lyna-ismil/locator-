@@ -69,7 +69,7 @@ export default function ReservationFlow({
   station: Station
   chargerId: string
   user: CarOwner
-  onComplete: (reservation: Reservation) => void
+  onComplete?: (reservation?: Reservation | null) => void
 }) {
   const [step, setStep] = useState<"details" | "payment" | "confirm" | "success">("details")
   const [paymentMethod, setPaymentMethod] = useState<"Visa" | "OnSite">("Visa")
@@ -84,19 +84,55 @@ export default function ReservationFlow({
   })
   const [batteryLevel, setBatteryLevel] = useState(25)
   const [targetLevel, setTargetLevel] = useState(80)
-  const [cardDetails, setCardDetails] = useState({
-    number: "",
-    expiry: "",
-    cvc: "",
-    name: "",
-  })
+
+  // ERROR state (add if not already present)
+  const [error, setError] = useState<string | null>(null)
+
+  // When vehicle details are missing, show friendly prompt and close safely
+  // Guard: require vehicle details (use vehicleDetails instead of vehicle)
+  if (!user?.vehicleDetails?.make) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-white rounded-lg shadow-lg border">
+          <div className="p-5">
+            <h3 className="text-lg font-semibold text-gray-800">Vehicle details required</h3>
+            <p className="mt-2 text-sm text-gray-600">
+              Vehicle details are missing. Please update your profile before creating a reservation.
+            </p>
+            <div className="mt-4 flex gap-3">
+              <button
+                className="px-4 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700"
+                onClick={() => {
+                  try {
+                    onComplete?.(null)
+                  } finally {
+                    window.location.href = "/dashboard/driver?view=profile"
+                  }
+                }}
+              >
+                Update Profile
+              </button>
+              <button
+                className="px-4 py-2 border rounded hover:bg-gray-50"
+                onClick={() => onComplete?.(null)}
+              >
+                Close
+              </button>
+            </div>
+            {error && <div className="mt-3 text-sm text-red-600">{error}</div>}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const connector = station.connectors.find((c) => c.id === chargerId)
 
   // Calculate estimates client-side based on vehicle & connector data
   React.useEffect(() => {
     if (step !== "details") return
     // require vehicle battery capacity and connector power to calculate
-    const batteryCapacity = user?.vehicle?.batteryCapacityKWh
+    const batteryCapacity = user?.vehicleDetails?.batteryCapacityKWh
     const connectorPower = connector?.power
     if (!batteryCapacity || !connectorPower) return
 
@@ -125,7 +161,7 @@ export default function ReservationFlow({
     chargerId,
     batteryLevel,
     targetLevel,
-    user?.vehicle?.batteryCapacityKWh,
+    user?.vehicleDetails?.batteryCapacityKWh,
     connector?.power,
     station.pricing,
   ])
@@ -136,13 +172,16 @@ export default function ReservationFlow({
       setError("User is missing. Please sign in.")
       return
     }
-    if (!user.vehicle) {
+    if (!user.vehicleDetails) {
       setError("Vehicle details are missing. Please update your profile.")
       return
     }
 
     // Try a few common places for the vehicle id
-    const carId = user.vehicle.id || user.vehicle._id || (user.vehicle as any).vehicleId
+    const carId =
+      user.vehicleDetails.id ||
+      (user.vehicleDetails as any)._id ||
+      (user.vehicleDetails as any).vehicleId
     if (!carId) {
       setError("Missing vehicle ID. Please re-save your vehicle in your profile.")
       return
@@ -211,7 +250,7 @@ export default function ReservationFlow({
               size="sm"
               onClick={() => {
                 if (step === "details") {
-                  onComplete(null as any) // Close modal
+                  onComplete?.(null) // Close modal safely
                 } else if (step === "payment") {
                   setStep("details")
                 } else if (step === "confirm") {

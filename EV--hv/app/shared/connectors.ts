@@ -2,6 +2,10 @@ export const CONNECTOR_TYPES = ["TYPE1", "TYPE2", "CHAdeMO", "CCS", "TESLA", "GB
 
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number]
 
+export const CONNECTOR_STATUSES = ["available", "busy", "offline", "maintenance"] as const
+
+export type ConnectorStatus = (typeof CONNECTOR_STATUSES)[number]
+
 // Enhanced vehicle details interface with better structure
 export interface VehicleDetails {
   id?: string
@@ -47,7 +51,7 @@ export interface Connector {
   id: string
   type: ConnectorType
   power: number
-  status: "available" | "busy" | "offline" | "maintenance"
+  status: ConnectorStatus
   maxPower?: number
   currentPower?: number
   estimatedWaitTime?: number
@@ -130,6 +134,7 @@ export interface Review {
 // Export all types for easy importing
 export type {
   ConnectorType,
+  ConnectorStatus,
   VehicleDetails,
   Preferences,
   CarOwner,

@@ -4,6 +4,7 @@ export type FAQ = {
   answer: string
   tags: string[]
   keywords?: string[]
+  actions?: string[]
 }
 
 export const FAQS: FAQ[] = [
@@ -77,7 +78,8 @@ export const FAQS: FAQ[] = [
     answer:
       "Each station has a network score from uptime, maintenance signals, and community reviews. We highlight verified reliable stations and warn when issues are detected.",
     tags: ["drivers", "owners", "quality"],
-    keywords: ["reliable", "uptime", "reviews", "maintenance"],
+    keywords: ["reliable", "uptime", "reviews", "maintenance", "status"],
+    actions: ["check_service_status"]
   },
   {
     id: "owners-benefits",
@@ -102,6 +104,7 @@ export const FAQS: FAQ[] = [
       "We’re expanding rapidly. You’ll see coverage clusters around urban centers, malls, and highway corridors. The map updates as new partners onboard.",
     tags: ["coverage", "map"],
     keywords: ["where", "available", "coverage", "country", "city", "area"],
+    actions: ["find_stations_near_me"]
   },
   {
     id: "api",

@@ -1,14 +1,15 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { FAQS } from "./faqs"
-import { buildIndex, topMatches } from "./search"
+import { FAQS } from "./faqs" //
+import { buildIndex, topMatches } from "./search" //
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { MessageCircleQuestion, Send, Zap, X, Sparkles, PlugZap } from 'lucide-react'
+import { findStationsNearMe, checkServiceStatus } from "./actions"
 
 type Msg = {
   id: string
@@ -23,9 +24,34 @@ const SUGGESTIONS = [
   "How do reservations work?",
   "What’s the pricing?",
   "Why should owners join?",
-]
+] //
 
 const STORAGE_KEY = "cc_chat_history_v1"
+
+// Updated askAI function to call our new API route
+async function askAI(query: string, context: string): Promise<string> {
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, context }),
+    })
+    if (!response.ok) {
+      let reason = ""
+      try {
+        const data = await response.json()
+        reason = data.error
+      } catch {}
+      throw new Error(reason || response.statusText)
+    }
+    const data = await response.json()
+    return data.response
+  } catch (error) {
+    console.error("Failed to ask AI:", error)
+    return "I'm sorry, I'm having trouble reaching the assistant right now. Please try again shortly."
+  }
+}
+
 
 export default function ChatbotWidget() {
   const [open, setOpen] = useState(false)
@@ -33,11 +59,11 @@ export default function ChatbotWidget() {
   const [messages, setMessages] = useState<Msg[]>([])
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const index = useMemo(() => buildIndex(FAQS), [])
+  const index = useMemo(() => buildIndex(FAQS), [FAQS]) //
   const faqById = useMemo(() => {
     const m = new Map(FAQS.map((f) => [f.id, f]))
     return m
-  }, [])
+  }, [FAQS]) //
 
   useEffect(() => {
     try {
@@ -75,7 +101,7 @@ export default function ChatbotWidget() {
     el.scrollTop = el.scrollHeight
   }, [messages, open])
 
-  function ask(query: string) {
+  async function ask(query: string) {
     const q = query.trim()
     if (!q) return
     setMessages((prev) => [
@@ -85,39 +111,53 @@ export default function ChatbotWidget() {
     setInput("")
 
     // simulate small delay
-    setTimeout(() => {
-      const matches = topMatches(q, index, 3, 1)
-      if (matches.length === 0) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content:
-              "I’m not fully sure, but here are popular topics I can help with:\n• Connectors and compatibility\n• Charging speeds and time‑to‑range\n• Pricing and reservations\n• Owner onboarding and analytics",
-            suggested: SUGGESTIONS,
-          },
-        ])
-        return
-      }
+    await new Promise(resolve => setTimeout(resolve, 220));
 
-      const best = faqById.get(matches[0].id)
-      const followUps =
-        matches
-          .slice(1)
-          .map((m) => faqById.get(m.id)?.question)
-          .filter(Boolean) as string[]
+    const matches = topMatches(q, index, 3, 1)
 
+    if (matches.length === 0) {
+      const context = FAQS.map(f => `Q: ${f.question}\nA: ${f.answer}`).join("\n\n");
+      const aiResponse = await askAI(q, context);
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          content: best?.answer || "Here’s what I found.",
-          suggested: followUps.length ? followUps : SUGGESTIONS,
+          content: aiResponse,
+          suggested: SUGGESTIONS,
         },
-      ])
-    }, 220)
+      ]);
+      return;
+    }
+
+    const best = faqById.get(matches[0].id)
+    if (best?.actions?.includes("find_stations_near_me")) {
+      const actionResponse = await findStationsNearMe()
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "assistant", content: actionResponse as string }])
+      return
+    }
+    if (best?.actions?.includes("check_service_status")) {
+      const actionResponse = await checkServiceStatus()
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "assistant", content: actionResponse as string }])
+      return
+    }
+
+
+    const followUps =
+      matches
+        .slice(1)
+        .map((m) => faqById.get(m.id)?.question)
+        .filter(Boolean) as string[]
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: best?.answer || "Here’s what I found.",
+        suggested: followUps.length ? followUps : SUGGESTIONS,
+      },
+    ])
   }
 
   function handleSubmit(e: React.FormEvent) {

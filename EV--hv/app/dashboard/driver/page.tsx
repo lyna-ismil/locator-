@@ -2,17 +2,29 @@
 
 import type React from "react"
 
-import { useEffect, useState, useCallback } from "react"
+import { useState, useEffect, useCallback } from "react"
 import dynamic from "next/dynamic"
 import { motion, AnimatePresence, type PanInfo } from "framer-motion"
-import { Car, Zap, User, Settings, Heart, Menu, X, Home, Search, Calendar, Bell, Loader2 } from "lucide-react"
+import { Car, Zap, User, Settings, Heart, Home, Search, Calendar, Bell, Loader2, LogOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import OnboardingForm from "./_components/OnboardingForm"
 import DriverDashboard from "./_components/DriverDashboard"
 import StationDetails from "./_components/StationDetails"
 import ReservationFlow from "./_components/ReservationFlow"
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarInset,
+  SidebarTrigger,
+} from "@/components/ui/sidebar"
 
 import type { CarOwner, Station } from "./types" // ensure types file exports these
 
@@ -88,7 +100,7 @@ function isProfileComplete(u: CarOwner) {
 }
 
 /* ---------- COMPONENT ---------- */
-export default function DriverPage() {
+export default function SignInPage() {
   const [user, setUser] = useState<CarOwner | null>(null)
   const [loadingUser, setLoadingUser] = useState(true)
 
@@ -101,12 +113,17 @@ export default function DriverPage() {
   const [reservationFlow, setReservationFlow] = useState<{ station: Station; chargerId: string } | null>(null)
   const [currentView, setCurrentView] = useState<DashboardView>("overview")
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
-  const [notifications] = useState(0)
+  const [notifications, setNotifications] = useState<any[]>([])
+  const [showNotifications, setShowNotifications] = useState(false)
+  const [loadingNotifications, setLoadingNotifications] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [swipeDirection, setSwipeDirection] = useState<"left" | "right" | null>(null)
   const [touchStartY, setTouchStartY] = useState(0)
   const [showQuickActions, setShowQuickActions] = useState(false)
+
+  // Gateway base (fall back to localhost)
+  const GATEWAY_BASE = (process.env.NEXT_PUBLIC_GATEWAY_BASE || "http://localhost:3001").replace(/\/$/, "")
 
   /* ---------- LOAD USER (LOCAL then API) ---------- */
   useEffect(() => {
@@ -273,6 +290,81 @@ export default function DriverPage() {
     return () => window.removeEventListener("keydown", handler)
   }, [isMobileMenuOpen])
 
+  /* ---------- NOTIFICATIONS ---------- */
+  // Fetch notifications (memoized so we can reuse)
+  const fetchNotifications = useCallback(async () => {
+    if (!user?.id) return
+    try {
+      setLoadingNotifications(true)
+      const res = await fetch(`${GATEWAY_BASE}/api/notifications?userId=${encodeURIComponent(user.id)}`, {
+        cache: "no-store",
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setNotifications(data)
+      }
+    } catch (e) {
+      console.error("Notifications fetch failed:", e)
+    } finally {
+      setLoadingNotifications(false)
+    }
+  }, [user?.id, GATEWAY_BASE])
+
+  // Initial + polling load
+  useEffect(() => {
+    fetchNotifications()
+    if (!user?.id) return
+    const interval = setInterval(fetchNotifications, 60000)
+    return () => clearInterval(interval)
+  }, [fetchNotifications, user?.id])
+
+  // Optional simple SSE (ignore errors silently)
+  useEffect(() => {
+    if (!user?.id) return
+    const url = `${GATEWAY_BASE}/api/notifications-stream?userId=${encodeURIComponent(user.id)}`
+    let es: EventSource | null = null
+    try {
+      es = new EventSource(url)
+      es.onmessage = (evt) => {
+        if (!evt.data) return
+        try {
+          const payload = JSON.parse(evt.data)
+          if (payload.type === "new" && payload.notification) {
+            setNotifications((prev) => [payload.notification, ...prev].slice(0, 100))
+          }
+        } catch {}
+      }
+    } catch {}
+    return () => {
+      es?.close()
+    }
+  }, [user?.id, GATEWAY_BASE])
+
+  async function markNotificationRead(id: string) {
+    try {
+      await fetch(`${GATEWAY_BASE}/api/notifications/${id}/read`, { method: "PATCH" })
+      setNotifications((prev) => prev.map((n) => (n._id === id ? { ...n, read: true, isRead: true } : n)))
+    } catch (e) {
+      console.error("Mark read failed:", e)
+    }
+  }
+
+  async function markAllNotificationsRead() {
+    if (!user?.id) return
+    try {
+      await fetch(`${GATEWAY_BASE}/api/notifications/mark-all-read`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: user.id }),
+      })
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true, isRead: true })))
+    } catch (e) {
+      console.error("Mark all read failed:", e)
+    }
+  }
+
+  const unreadCount = notifications.filter((n) => !(n.read ?? n.isRead)).length
+
   /* ---------- LOADING & ERROR STATES ---------- */
   if (loadingUser) {
     return (
@@ -334,194 +426,6 @@ export default function DriverPage() {
     { id: "settings", label: "Settings", icon: Settings, badge: null, shortcut: "Alt+6" },
   ] as const
 
-  const Sidebar = () => (
-    <motion.div
-      initial={{ x: isMobile ? -300 : 0 }}
-      animate={{ x: 0 }}
-      exit={{ x: isMobile ? -300 : 0 }}
-      drag={isMobile ? "x" : false}
-      dragConstraints={{ left: -50, right: 0 }}
-      onDragEnd={handleSwipe}
-      className={`${isMobile ? "fixed inset-y-0 left-0 z-50 w-72" : "w-64"} bg-gradient-to-b from-white to-gray-50 border-r border-gray-200 shadow-xl`}
-    >
-      <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-emerald-500 to-lime-500">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center border border-white/30">
-              <Zap className="w-7 h-7 text-white" />
-            </div>
-            <div>
-              <h2 className="font-bold text-white text-lg">ChargeConnect</h2>
-              <p className="text-white/80 text-sm font-medium">Driver Portal</p>
-            </div>
-          </div>
-          {isMobile && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsMobileMenuOpen(false)}
-              className="text-white hover:bg-white/20"
-            >
-              <X className="w-5 h-5" />
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <div className="p-4">
-        <Card className="bg-gradient-to-br from-emerald-50 via-lime-50 to-green-50 border-emerald-200 shadow-sm hover:shadow-md transition-shadow duration-200">
-          <CardContent className="p-4">
-            <div className="flex items-center space-x-3">
-              <div className="relative">
-                <div className="w-14 h-14 bg-gradient-to-br from-emerald-500 to-lime-500 rounded-full flex items-center justify-center shadow-lg">
-                  <span className="text-white font-bold text-xl">{user.fullName.charAt(0)}</span>
-                </div>
-                <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-green-500 rounded-full border-2 border-white"></div>
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-semibold text-gray-900 truncate text-sm">{user.fullName}</p>
-                <p className="text-xs text-gray-600 truncate">{user.email}</p>
-                {user.vehicleDetails?.make && (
-                  <div className="flex items-center mt-1.5">
-                    <Car className="w-3 h-3 text-emerald-600 mr-1" />
-                    <span className="text-xs text-emerald-700 font-medium">
-                      {user.vehicleDetails.make} {user.vehicleDetails.model}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <nav className="px-4 pb-4 space-y-2">
-        {navigationItems.map((item) => {
-          const Icon = item.icon
-          const isActive = currentView === item.id
-          return (
-            <Button
-              key={item.id}
-              variant={isActive ? "default" : "ghost"}
-              className={`w-full justify-start h-12 transition-all duration-200 ${
-                isActive
-                  ? "bg-gradient-to-r from-emerald-500 to-lime-500 hover:from-emerald-600 hover:to-lime-600 text-white shadow-md"
-                  : "hover:bg-gray-100 text-gray-700 hover:text-gray-900 hover:shadow-sm"
-              }`}
-              onClick={() => {
-                setCurrentView(item.id as DashboardView)
-                if (isMobile) setIsMobileMenuOpen(false)
-                if (isMobile && "vibrate" in navigator) navigator.vibrate(10)
-              }}
-              title={item.shortcut}
-            >
-              <Icon className={`w-5 h-5 mr-3 ${isActive ? "text-white" : "text-gray-500"}`} />
-              <span className="flex-1 text-left font-medium">{item.label}</span>
-              {!!item.badge && (
-                <Badge
-                  variant={isActive ? "secondary" : "outline"}
-                  className={`ml-auto text-xs ${
-                    isActive
-                      ? "bg-white/20 text-white border-white/30"
-                      : "bg-emerald-100 text-emerald-700 border-emerald-200"
-                  }`}
-                >
-                  {item.badge}
-                </Badge>
-              )}
-            </Button>
-          )
-        })}
-      </nav>
-
-      <div className="mt-auto p-4 border-t border-gray-200">
-        <div className="grid grid-cols-2 gap-3 text-center mb-4">
-          <div className="bg-emerald-50 rounded-lg p-2">
-            <div className="text-lg font-bold text-emerald-600">{favorites.length}</div>
-            <div className="text-xs text-emerald-700">Favorites</div>
-          </div>
-          <div className="bg-blue-50 rounded-lg p-2">
-            <div className="text-lg font-bold text-blue-600">{stations.length}</div>
-            <div className="text-xs text-blue-700">Nearby</div>
-          </div>
-        </div>
-        <Button
-          onClick={() => {
-            localStorage.removeItem("driverUser")
-            localStorage.removeItem("driverUserId")
-            setUser(null)
-            window.location.href = "/sign-in"
-          }}
-          variant="outline"
-          className="w-full text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300 transition-colors duration-200"
-        >
-          Log Out
-        </Button>
-      </div>
-    </motion.div>
-  )
-
-  const MobileHeader = () => (
-    <div className="md:hidden bg-gradient-to-r from-emerald-500 to-lime-500 px-4 py-3 flex items-center justify-between shadow-lg">
-      {isRefreshing && <div className="absolute top-0 left-0 right-0 h-1 bg-white/50 animate-pulse" />}
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => setIsMobileMenuOpen(true)}
-        className="text-white hover:bg-white/20"
-      >
-        <Menu className="w-6 h-6" />
-      </Button>
-      <div className="flex items-center space-x-2">
-        <Zap className="w-6 h-6 text-white" />
-        <span className="font-bold text-white">ChargeConnect</span>
-      </div>
-      <Button variant="ghost" size="sm" className="relative text-white hover:bg-white/20">
-        <Bell className="w-5 h-5" />
-        {notifications > 0 && (
-          <Badge className="absolute -top-1 -right-1 w-4 h-4 p-0 text-xs bg-red-500 text-white">
-            {notifications > 9 ? "9+" : notifications}
-          </Badge>
-        )}
-      </Button>
-    </div>
-  )
-
-  const BottomNavigation = () => (
-    <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-sm border-t border-gray-200 z-40 shadow-lg">
-      <div className="grid grid-cols-4 gap-1 p-2">
-        {["overview", "discover", "reservations", "favorites"].map((id) => {
-          const item = navigationItems.find((n) => n.id === id)!
-          const Icon = item.icon
-          const isActive = currentView === item.id
-          return (
-            <Button
-              key={item.id}
-              variant="ghost"
-              className={`flex flex-col items-center h-16 transition-all duration-200 ${
-                isActive ? "text-emerald-600 bg-emerald-50" : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
-              }`}
-              onClick={() => {
-                setCurrentView(item.id as DashboardView)
-                if ("vibrate" in navigator) navigator.vibrate(10)
-              }}
-            >
-              <Icon className={`w-5 h-5 mb-1 ${isActive ? "text-emerald-600" : "text-gray-500"}`} />
-              <span className={`text-xs font-medium ${isActive ? "text-emerald-600" : "text-gray-600"}`}>
-                {item.label}
-              </span>
-              {!!item.badge && (
-                <Badge className="absolute top-1 right-2 w-4 h-4 p-0 text-xs bg-red-500 text-white">
-                  {Number(item.badge) > 9 ? "9+" : item.badge}
-                </Badge>
-              )}
-            </Button>
-          )
-        })}
-      </div>
-    </div>
-  )
-
   const renderContent = () => {
     const safeUpdateFavorites = async (newFavs: string[]) => {
       if (!user?.id) return
@@ -530,79 +434,173 @@ export default function DriverPage() {
         setFavorites(newFavs)
       } catch {}
     }
-    switch (currentView) {
-      case "discover":
-        if (loadingLocation) {
-          return (
-            <div className="h-full flex flex-col items-center justify-center text-gray-600">
-              <Loader2 className="w-12 h-12 animate-spin text-emerald-500 mb-4" />
-              <p className="text-lg font-medium">Finding your location...</p>
-              <p className="text-sm text-gray-500">Please wait while we pinpoint your position.</p>
-            </div>
-          )
-        }
+    if (currentView === "discover") {
+      if (loadingLocation) {
         return (
-          <StationDiscovery
-            user={user}
-            location={location}
-            stations={stations}
-            onSelectStation={setSelectedStation}
-            favorites={favorites}
-            setFavorites={safeUpdateFavorites}
-          />
+          <div className="h-full flex flex-col items-center justify-center text-gray-600">
+            <Loader2 className="w-12 h-12 animate-spin text-emerald-500 mb-4" />
+            <p className="text-lg font-medium">Finding your location...</p>
+            <p className="text-sm text-gray-500">Please wait while we pinpoint your position.</p>
+          </div>
         )
-      default:
-        return (
-          <DriverDashboard
-            user={user}
-            favorites={favorites}
-            setFavorites={safeUpdateFavorites}
-            stations={stations} // <- PASS stations array here
-          />
-        )
+      }
+      return (
+        <StationDiscovery
+          user={user}
+          location={location}
+          stations={stations}
+          onSelectStation={setSelectedStation}
+          favorites={favorites}
+          setFavorites={safeUpdateFavorites}
+        />
+      )
     }
+    return (
+      <DriverDashboard
+        user={user}
+        favorites={favorites}
+        setFavorites={safeUpdateFavorites}
+        stations={stations}
+        activeView={currentView}
+        setActiveView={setCurrentView}
+      />
+    )
   }
 
   return (
-    <div
-      className="h-screen bg-gray-50 flex overflow-hidden"
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-    >
-      <AnimatePresence>
-        {isMobile && isMobileMenuOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/50 z-40"
-            onClick={() => setIsMobileMenuOpen(false)}
-          />
-        )}
-      </AnimatePresence>
+    <SidebarProvider>
+      <div className="min-h-screen flex w-full bg-gray-50">
+        <Sidebar className="border-r border-gray-200">
+          <SidebarHeader className="border-b border-gray-200 p-6">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-emerald-500 via-lime-500 to-emerald-600 grid place-items-center shadow-lg">
+                <Zap className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-lg font-bold tracking-tight text-gray-900">ChargeConnect</h1>
+                <p className="text-xs uppercase tracking-[0.2em] text-gray-500 font-medium">Driver Portal</p>
+              </div>
+            </div>
+          </SidebarHeader>
 
-      <AnimatePresence>{(!isMobile || isMobileMenuOpen) && <Sidebar />}</AnimatePresence>
+          <SidebarContent className="p-4">
+            <div className="mb-6">
+              <div className="bg-gradient-to-br from-emerald-50 to-lime-50 rounded-xl p-4 border border-emerald-100">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="h-12 w-12 rounded-full bg-gradient-to-br from-emerald-500 to-lime-500 grid place-items-center text-white font-bold text-lg">
+                    {user?.fullName?.charAt(0) || "D"}
+                  </div>
+                  <div>
+                    <div className="font-semibold text-gray-900">{user?.fullName || "Driver"}</div>
+                    <div className="text-sm text-gray-600">Premium Account</div>
+                  </div>
+                </div>
+                {user?.vehicleDetails?.make && (
+                  <div className="flex items-center mb-3">
+                    <Car className="w-4 h-4 text-emerald-600 mr-2" />
+                    <span className="text-sm text-emerald-700 font-medium">
+                      {user.vehicleDetails.make} {user.vehicleDetails.model}
+                    </span>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-3 text-center">
+                  <div className="bg-white/80 rounded-lg p-2">
+                    <div className="text-lg font-bold text-emerald-600">{favorites.length}</div>
+                    <div className="text-xs text-gray-600">Favorites</div>
+                  </div>
+                  <div className="bg-white/80 rounded-lg p-2">
+                    <div className="text-lg font-bold text-blue-600">{stations.length}</div>
+                    <div className="text-xs text-gray-600">Nearby</div>
+                  </div>
+                </div>
+              </div>
+            </div>
 
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <MobileHeader />
-        <main className={`flex-1 overflow-auto ${isMobile ? "pb-20" : ""}`}>
-          <motion.div
-            key={currentView}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.25 }}
-            className="h-full"
-            drag={isMobile ? "x" : false}
-            dragConstraints={{ left: 0, right: 0 }}
-            onDragEnd={handleSwipe}
-          >
-            {renderContent()}
-          </motion.div>
-        </main>
+            <SidebarMenu>
+              {navigationItems.map((item) => (
+                <SidebarMenuItem key={item.id}>
+                  <SidebarMenuButton
+                    isActive={currentView === item.id}
+                    onClick={() => setCurrentView(item.id as DashboardView)}
+                    className="w-full justify-start"
+                  >
+                    <item.icon className="h-4 w-4" />
+                    <span>{item.label}</span>
+                    {item.badge !== null && (
+                      <Badge className="ml-auto bg-emerald-100 text-emerald-800 text-xs px-2 py-0.5">
+                        {item.badge}
+                      </Badge>
+                    )}
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarContent>
+
+          <SidebarFooter className="border-t border-gray-200 p-4">
+            <Button
+              onClick={() => {
+                localStorage.removeItem("driverUser")
+                localStorage.removeItem("driverUserId")
+                setUser(null)
+                window.location.href = "/sign-in"
+              }}
+              variant="outline"
+              className="w-full justify-start text-red-600 border-red-200 hover:bg-red-50 bg-transparent"
+            >
+              <LogOut className="h-4 w-4 mr-2" />
+              Log Out
+            </Button>
+          </SidebarFooter>
+        </Sidebar>
+
+        <SidebarInset className="flex-1">
+          <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-sm border-b border-gray-200 px-6 py-4">
+            <div className="flex items-center gap-4">
+              <SidebarTrigger />
+              <div className="flex items-center gap-2">
+                <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100 px-3 py-1">
+                  <Search className="h-3 w-3 mr-1" />
+                  {stations.length} Station{stations.length !== 1 ? "s" : ""} Nearby
+                </Badge>
+                {unreadCount > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="relative"
+                    onClick={() => setShowNotifications((p) => !p)}
+                  >
+                    <Bell className="w-4 h-4" />
+                    <Badge className="absolute -top-1 -right-1 w-5 h-5 p-0 text-[10px] justify-center bg-red-600 text-white">
+                      {unreadCount > 99 ? "99+" : unreadCount}
+                    </Badge>
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="p-6">
+            <div className="absolute inset-0 -z-10 overflow-hidden">
+              <div className="absolute -top-20 -left-16 h-80 w-80 rounded-full bg-lime-200 blur-3xl opacity-30" />
+              <div className="absolute top-40 -right-16 h-[26rem] w-[26rem] rounded-full bg-emerald-200 blur-3xl opacity-30" />
+              <div className="absolute -bottom-24 left-1/2 -translate-x-1/2 h-[28rem] w-[28rem] rounded-full bg-amber-100 blur-3xl opacity-30" />
+            </div>
+
+            <motion.div
+              key={currentView}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25 }}
+              className="relative"
+            >
+              {renderContent()}
+            </motion.div>
+          </div>
+        </SidebarInset>
       </div>
 
-      {isMobile && <BottomNavigation />}
-
+      {/* Keep existing modals and overlays */}
       <AnimatePresence>
         {selectedStation && (
           <motion.div
@@ -641,6 +639,78 @@ export default function DriverPage() {
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+
+      <AnimatePresence>
+        {showNotifications && (
+          <motion.div
+            key="notif-panel"
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.18 }}
+            className="fixed top-16 right-4 z-50 w-full max-w-sm"
+          >
+            <Card className="shadow-2xl border border-gray-200">
+              <CardHeader className="py-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">Notifications</CardTitle>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={unreadCount === 0}
+                      onClick={markAllNotificationsRead}
+                      className="text-xs bg-transparent"
+                    >
+                      Mark all
+                    </Button>
+                    <Button size="sm" variant="ghost" className="text-xs" onClick={() => fetchNotifications()}>
+                      Refresh
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="max-h-80 overflow-y-auto space-y-2">
+                {loadingNotifications && <div className="text-xs text-gray-500">Loading...</div>}
+                {!loadingNotifications && notifications.length === 0 && (
+                  <div className="text-xs text-gray-500">No notifications.</div>
+                )}
+                {notifications.map((n) => {
+                  const unread = !(n.read ?? n.isRead)
+                  return (
+                    <div
+                      key={n._id}
+                      className={`p-3 rounded-lg border text-sm ${
+                        unread ? "bg-emerald-50 border-emerald-200" : "bg-white border-gray-200"
+                      }`}
+                    >
+                      <div className="font-medium text-gray-800">{n.title || n.type || "Notification"}</div>
+                      {n.message || n.body ? (
+                        <div className="text-xs text-gray-600 mt-0.5">{n.message || n.body}</div>
+                      ) : null}
+                      <div className="flex items-center justify-between mt-1">
+                        <span className="text-[10px] text-gray-400">
+                          {n.createdAt ? new Date(n.createdAt).toLocaleString() : ""}
+                        </span>
+                        {unread && (
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="h-auto p-0 text-[11px] text-emerald-600"
+                            onClick={() => markNotificationRead(n._id)}
+                          >
+                            Mark as read
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </SidebarProvider>
   )
 }

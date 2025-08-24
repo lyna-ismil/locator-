@@ -1,4 +1,6 @@
-import { CONNECTOR_TYPES, ConnectorType } from "@/app/shared/connectors"
+import type { ConnectorType, Preferences } from "@/app/shared/connectors"
+
+export { CONNECTOR_TYPES } from "@/app/shared/connectors"
 
 // Ensure VehicleDetails has id
 export interface VehicleDetails {

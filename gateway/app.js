@@ -69,6 +69,26 @@ Object.keys(services).forEach(route => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// --- Notifications Proxy ---
+app.use(
+  '/api/notifications',
+  createProxyMiddleware({
+    target: process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:4005',
+    changeOrigin: true,
+    pathRewrite: { '^/api/notifications': '/notifications' },
+  })
+);
+
+// --- SSE Stream Proxy (optional) ---
+app.use(
+  '/api/notifications-stream',
+  createProxyMiddleware({
+    target: process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:4005',
+    changeOrigin: true,
+    pathRewrite: { '^/api/notifications-stream': '/notifications/stream' },
+  })
+);
+
 // --- Helper Functions ---
 const startMicroservices = () => {
     console.log("🚀 Starting Microservices...");

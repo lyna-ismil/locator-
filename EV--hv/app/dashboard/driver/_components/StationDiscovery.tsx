@@ -22,10 +22,11 @@ import {
   ChevronUp,
   Layers,
   List,
+  X,
 } from "lucide-react"
 import type { CarOwner, ConnectorType, Station, Connector } from "../types"
 
-const MapTunisia = dynamic(() => import("@/components/map/tunisia-map"), {
+const DashboardMap = dynamic(() => import("@/components/map/dashboard-map"), {
   ssr: false,
   loading: () => (
     <div className="w-full h-full flex items-center justify-center text-sm text-gray-500">Loading map...</div>
@@ -44,7 +45,7 @@ interface Props {
   setFavorites: (ids: string[]) => void
 }
 
-const MAP_HEIGHT = "calc(100vh - 220px)"
+const MAP_HEIGHT = "450px"
 
 /* --- Helpers inserted here --- */
 function haversine(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -122,6 +123,7 @@ export default function StationDiscovery({
   const [viewMode, setViewMode] = useState<ViewMode>("map")
   const [sortBy, setSortBy] = useState<SortOption>("distance")
   const [showFilters, setShowFilters] = useState(false)
+  const [selectedStationId, setSelectedStationId] = useState<string | null>(null)
   const [filters, setFilters] = useState({
     maxDistance: 10,
     minPower: 0,
@@ -189,10 +191,23 @@ export default function StationDiscovery({
     fetchNearby()
   }, [fetchNearby])
 
-  // Use provided stations if passed, else backend
+  // Normalize stations passed in via props (they may be raw backend objects)
+  const normalizedPropStations = useMemo(() => {
+    if (!stations || !stations.length) return []
+    return stations.map((s) => {
+      // detect already-normalized shape: has location.lat and pricing is a string
+      if (s?.location && typeof s.location.lat === "number" && typeof s.pricing === "string") {
+        return s
+      }
+      // otherwise adapt the backend shape into the normalized Station shape
+      return adaptBackendStation(s, location)
+    })
+  }, [stations, location])
+
+  // Use provided (and normalized) stations if present, otherwise use backendStations
   const combinedStations = useMemo(
-    () => (stations && stations.length ? stations : backendStations),
-    [stations, backendStations],
+    () => (normalizedPropStations.length ? normalizedPropStations : backendStations),
+    [normalizedPropStations, backendStations],
   )
 
   const filteredStations = useMemo(() => {
@@ -300,8 +315,10 @@ export default function StationDiscovery({
       transition={{ duration: 0.2 }}
     >
       <Card
-        className="cursor-pointer hover:shadow-2xl transition-all duration-300 border-0 bg-white/80 backdrop-blur-sm hover:bg-white/95 overflow-hidden group"
-        onClick={() => onSelectStation(station)}
+        className={`cursor-pointer hover:shadow-2xl transition-all duration-300 border-0 bg-white/80 backdrop-blur-sm hover:bg-white/95 overflow-hidden group ${
+          selectedStationId === station.id ? "ring-2 ring-emerald-500 shadow-2xl" : ""
+        }`}
+        onClick={() => handleStationSelect(station)}
       >
         <CardContent className="p-0">
           <div className="relative h-36 bg-gradient-to-br from-emerald-400 via-lime-300 to-yellow-200 overflow-hidden">
@@ -390,6 +407,24 @@ export default function StationDiscovery({
     </motion.div>
   )
 
+  const handleStationSelect = useCallback(
+    (station: Station) => {
+      // Clear any existing selection first to prevent overlaps
+      setSelectedStationId(null)
+
+      // Small delay to ensure cleanup, then set new selection
+      setTimeout(() => {
+        setSelectedStationId(station.id)
+        onSelectStation(station)
+      }, 50)
+    },
+    [onSelectStation],
+  )
+
+  const clearStationSelection = useCallback(() => {
+    setSelectedStationId(null)
+  }, [])
+
   const renderMap = () => {
     if (!location) {
       return (
@@ -397,14 +432,17 @@ export default function StationDiscovery({
       )
     }
     return (
-      <MapTunisia
+      <DashboardMap
         center={location}
-        stations={filteredStations} // already normalized: location:{lat,lng}
+        stations={filteredStations}
         height={MAP_HEIGHT}
         onMarkerClick={(id: string) => {
           const st = filteredStations.find((s) => s.id === id)
-          if (st) onSelectStation(st)
+          if (st) handleStationSelect(st)
         }}
+        userLocation={location}
+        showUserLocation={true}
+        selectedStationId={selectedStationId}
       />
     )
   }
@@ -542,33 +580,62 @@ export default function StationDiscovery({
       {/* Main Content */}
       <div className="flex-1 relative">
         {viewMode === "map" ? (
-          <>
-            <div className="absolute inset-0">
+          <div className="flex flex-col h-full">
+            {/* Map Container */}
+            <div className="flex-1 min-h-0 relative">
               <div style={{ height: MAP_HEIGHT }} className="w-full">
                 {renderMap()}
               </div>
+
+              {selectedStationId && (
+                <div className="absolute inset-0 z-10 pointer-events-none" onClick={clearStationSelection} />
+              )}
             </div>
-            <div className="absolute bottom-4 left-4 right-4 max-h-64 overflow-hidden pointer-events-none">
-              <Card className="bg-white/90 backdrop-blur-md border-0 shadow-2xl pointer-events-auto rounded-2xl overflow-hidden">
+
+            {/* Details Section - No longer overlapping */}
+            <div className="flex-shrink-0 p-4 relative z-20">
+              <Card className="bg-white/90 backdrop-blur-md border-0 shadow-2xl rounded-2xl overflow-hidden">
                 <CardHeader className="pb-2 bg-gradient-to-r from-emerald-50 to-lime-50">
-                  <CardTitle className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                    <MapPin className="w-5 h-5 text-emerald-600" />
-                    Nearby Stations
-                  </CardTitle>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                      <MapPin className="w-5 h-5 text-emerald-600" />
+                      Nearby Stations
+                    </CardTitle>
+                    {selectedStationId && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={clearStationSelection}
+                        className="h-8 w-8 p-0 hover:bg-gray-100"
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    )}
+                  </div>
                 </CardHeader>
                 <CardContent className="max-h-48 overflow-y-auto">
                   {filteredStations.length === 0 ? (
                     <div className="py-6 text-sm text-gray-500 text-center">No stations match your filters.</div>
                   ) : (
                     <div className="space-y-3">
-                      {filteredStations.slice(0, 4).map((station) => (
+                      {filteredStations.slice(0, 4).map((station, idx) => (
                         <div
-                          key={station.id}
-                          className="flex items-center justify-between p-4 bg-white/80 backdrop-blur-sm rounded-xl border border-gray-100 cursor-pointer hover:border-emerald-300 hover:shadow-md transition-all duration-200 group"
-                          onClick={() => onSelectStation(station)}
+                          key={station.id ?? station._id ?? station.stationId ?? `${station.name ?? "station"}-${idx}`}
+                          className={`flex items-center justify-between p-4 bg-white/80 backdrop-blur-sm rounded-xl border cursor-pointer hover:border-emerald-300 hover:shadow-md transition-all duration-200 group ${
+                            selectedStationId === station.id
+                              ? "border-emerald-500 bg-emerald-50/50 shadow-md"
+                              : "border-gray-100"
+                          }`}
+                          onClick={() => handleStationSelect(station)}
                         >
                           <div className="flex-1">
-                            <h5 className="font-semibold text-gray-900 group-hover:text-emerald-700 transition-colors">
+                            <h5
+                              className={`font-semibold transition-colors ${
+                                selectedStationId === station.id
+                                  ? "text-emerald-700"
+                                  : "text-gray-900 group-hover:text-emerald-700"
+                              }`}
+                            >
                               {station.name}
                             </h5>
                             <p className="text-sm text-gray-600 font-medium">
@@ -602,7 +669,7 @@ export default function StationDiscovery({
                 </CardContent>
               </Card>
             </div>
-          </>
+          </div>
         ) : (
           <div className="p-6 overflow-y-auto h-full">
             {filteredStations.length === 0 ? (
