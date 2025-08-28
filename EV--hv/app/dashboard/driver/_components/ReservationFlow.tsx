@@ -23,30 +23,24 @@ function parsePricePerKwh(priceString?: string): number {
 }
 
 const api = {
-  createReservation: async (
-    userId: string,
-    carId: string,
-    stationId: string,
-    connectorId: string,
-    startTime: string,
-    endTime: string,
-    paymentMethod: "Visa" | "OnSite"
-  ): Promise<Reservation> => {
+  createReservation: async (reservationData: {
+    userId: string
+    carId: string
+    stationId: string
+    connectorId: string
+    startTime: string
+    endTime: string
+  }): Promise<Reservation> => {
     const res = await fetch("http://localhost:5000/reservations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        userId,
-        carId,
-        stationId,
-        connectorId,
-        startTime,
-        endTime,
-        paymentMethod,
-      }),
-    });
-    if (!res.ok) throw new Error("Reservation failed");
-    return await res.json();
+      body: JSON.stringify(reservationData),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.msg || `Reservation failed (HTTP ${res.status})`)
+    }
+    return await res.json()
   },
   getEstimates: async (stationId: string, chargerId: string) => {
     // Simulate API delay
@@ -84,9 +78,37 @@ export default function ReservationFlow({
   })
   const [batteryLevel, setBatteryLevel] = useState(25)
   const [targetLevel, setTargetLevel] = useState(80)
-
-  // ERROR state (add if not already present)
+  // Added: card details state to prevent ReferenceError
+  const [cardDetails, setCardDetails] = useState({
+    number: "",
+    expiry: "",
+    cvc: "",
+    name: user?.fullName || "",
+  })
+  // ERROR state
   const [error, setError] = useState<string | null>(null)
+
+  // NEW: Scheduling state
+  const initRounded = (() => {
+    const d = new Date()
+    const mins = d.getMinutes()
+    const rounded = Math.ceil(mins / 15) * 15
+    if (rounded === 60) {
+      d.setHours(d.getHours() + 1)
+      d.setMinutes(0, 0, 0)
+    } else {
+      d.setMinutes(rounded, 0, 0)
+    }
+    return d
+  })()
+  const [reservationDate, setReservationDate] = useState(
+    initRounded.toISOString().slice(0, 10) // YYYY-MM-DD
+  )
+  const [reservationTime, setReservationTime] = useState(
+    initRounded.toTimeString().slice(0, 5) // HH:MM
+  )
+  const [durationMinutes, setDurationMinutes] = useState(30)
+  const [scheduleError, setScheduleError] = useState<string | null>(null)
 
   // When vehicle details are missing, show friendly prompt and close safely
   // Guard: require vehicle details (use vehicleDetails instead of vehicle)
@@ -166,59 +188,66 @@ export default function ReservationFlow({
     station.pricing,
   ])
 
+  // Derived scheduled Date objects for summary & validation
+  const scheduledStart = React.useMemo(
+    () => new Date(`${reservationDate}T${reservationTime}:00`),
+    [reservationDate, reservationTime]
+  )
+  const scheduledEnd = React.useMemo(
+    () => new Date(scheduledStart.getTime() + durationMinutes * 60_000),
+    [scheduledStart, durationMinutes]
+  )
+
+  function formatDT(d: Date) {
+    if (isNaN(d.getTime())) return "—"
+    return d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+  }
+
   async function handleConfirm() {
-    // Basic validations
-    if (!user) {
-      setError("User is missing. Please sign in.")
-      return
-    }
-    if (!user.vehicleDetails) {
-      setError("Vehicle details are missing. Please update your profile.")
-      return
-    }
-
-    // Try a few common places for the vehicle id
-    const carId =
-      user.vehicleDetails.id ||
-      (user.vehicleDetails as any)._id ||
-      (user.vehicleDetails as any).vehicleId
-    if (!carId) {
-      setError("Missing vehicle ID. Please re-save your vehicle in your profile.")
-      return
-    }
-
-    // Ensure station id is available
+    const vehicle = user?.vehicleDetails || (user as any).vehicle
+    if (!user || !vehicle) return setError("User or vehicle details are missing.")
+    const carId = vehicle.id || vehicle._id || vehicle.vehicleId
+    if (!carId) return setError("Missing vehicle ID. Update your profile.")
     const stationId = (station as any).id || (station as any)._id
-    if (!stationId) {
-      setError("Station identifier is missing.")
+    if (!stationId) return setError("Station identifier missing.")
+
+    if (isNaN(scheduledStart.getTime())) {
+      setError("Invalid scheduled start time.")
       return
     }
+    if (scheduledStart.getTime() < Date.now() - 60_000) {
+      setError("Scheduled start time is in the past.")
+      return
+    }
+    if (durationMinutes < 5) {
+      setError("Minimum duration is 5 minutes.")
+      return
+    }
+
+    const startTime = scheduledStart.toISOString()
+    const endTime = scheduledEnd.toISOString()
 
     setLoading(true)
     setError(null)
-
     try {
-      // Reserve for the next 30 minutes by default
-      const startTime = new Date().toISOString()
-      const endTime = new Date(Date.now() + 30 * 60 * 1000).toISOString()
-
-      // Call API helper - adjust call signature if your api helper differs
-      const reservation = await api.createReservation(
-        user.id,
+      const newRes = await api.createReservation({
+        userId: user.id,
         carId,
         stationId,
-        chargerId,
+        connectorId: chargerId,
         startTime,
         endTime,
-        paymentMethod
-      )
-
-      setReservation(reservation)
+      })
+      setReservation(newRes)
       setStep("success")
-      // Optionally call onComplete/onComplete callback here:
-      // if (onComplete) onComplete(reservation)
-    } catch (err: any) {
-      setError(err?.message || "An unknown error occurred during reservation.")
+    } catch (e: any) {
+      setError(e?.message || "Reservation failed.")
     } finally {
       setLoading(false)
     }
@@ -397,6 +426,51 @@ export default function ReservationFlow({
                     </CardContent>
                   </Card>
 
+                  {/* Scheduling Section */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center space-x-2">
+                        <Clock className="w-5 h-5" />
+                        <span>Schedule</span>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="resDate">Date</Label>
+                          <Input
+                            id="resDate"
+                            type="date"
+                            min={new Date().toISOString().slice(0, 10)}
+                            value={reservationDate}
+                            onChange={(e) => setReservationDate(e.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="resTime">Start Time</Label>
+                          <Input
+                            id="resTime"
+                            type="time"
+                            step={900}
+                            value={reservationTime}
+                            onChange={(e) => setReservationTime(e.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="duration">Duration (min)</Label>
+                          <Input
+                            id="duration"
+                            type="number"
+                            min="5"
+                            value={durationMinutes}
+                            onChange={(e) => setDurationMinutes(Number(e.target.value))}
+                          />
+                        </div>
+                      </div>
+                      {scheduleError && <div className="text-sm text-red-600">{scheduleError}</div>}
+                    </CardContent>
+                  </Card>
+
                   <Button
                     onClick={() => setStep("payment")}
                     className="w-full h-12 bg-gradient-to-r from-emerald-600 to-lime-600 hover:from-emerald-700 hover:to-lime-700 text-white font-semibold"
@@ -563,7 +637,6 @@ export default function ReservationFlow({
                     <h3 className="text-xl font-semibold mb-4">Confirm Your Reservation</h3>
                   </div>
 
-                  {/* Reservation Summary */}
                   <Card>
                     <CardHeader>
                       <CardTitle>Reservation Summary</CardTitle>
@@ -587,8 +660,21 @@ export default function ReservationFlow({
                       </div>
                       <Separator />
                       <div className="flex justify-between items-center">
-                        <span className="text-gray-600">Estimated Duration</span>
-                        <span className="font-medium">{estimates.duration} minutes</span>
+                        <span className="text-gray-600">Scheduled Start</span>
+                        <span className="font-medium">{formatDT(scheduledStart)}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-600">Scheduled End</span>
+                        <span className="font-medium">{formatDT(scheduledEnd)}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-600">Duration</span>
+                        <span className="font-medium">{durationMinutes} min</span>
+                      </div>
+                      <Separator />
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-600">Estimated Charging Time</span>
+                        <span className="font-medium">{estimates.duration} min</span>
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-gray-600">Estimated Cost</span>
@@ -600,10 +686,14 @@ export default function ReservationFlow({
                           {paymentMethod === "Visa" ? "Visa ••••4242" : "Pay at Station"}
                         </span>
                       </div>
+                      {error && (
+                        <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">
+                          {error}
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
 
-                  {/* Reservation Terms */}
                   <Card className="bg-amber-50 border-amber-200">
                     <CardContent className="p-4">
                       <div className="flex items-start space-x-3">
@@ -611,9 +701,10 @@ export default function ReservationFlow({
                         <div>
                           <h5 className="font-medium text-amber-900 mb-1">Reservation Terms</h5>
                           <ul className="text-sm text-amber-800 space-y-1">
-                            <li>• Reservation expires in 15 minutes</li>
-                            <li>• Cancellation is free until you start charging</li>
-                            <li>• Actual costs may vary based on charging speed</li>
+                            <li>• Your slot starts at {formatDT(scheduledStart)}</li>
+                            <li>• Please arrive before the scheduled start to avoid auto-cancellation</li>
+                            <li>• Session auto-ends at {formatDT(scheduledEnd)} if not started</li>
+                            <li>• Cancellation free until charging begins</li>
                           </ul>
                         </div>
                       </div>
@@ -622,7 +713,7 @@ export default function ReservationFlow({
 
                   <Button
                     onClick={handleConfirm}
-                    disabled={loading}
+                    disabled={loading || isNaN(scheduledStart.getTime())}
                     className="w-full h-12 bg-gradient-to-r from-emerald-600 to-lime-600 hover:from-emerald-700 hover:to-lime-700 text-white font-semibold"
                   >
                     {loading ? (

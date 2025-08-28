@@ -1,18 +1,18 @@
 "use client"
 
 import type React from "react"
-
 import { useState, useEffect, useCallback } from "react"
 import dynamic from "next/dynamic"
-import { motion, AnimatePresence, type PanInfo } from "framer-motion"
+import { motion, AnimatePresence } from "framer-motion"
 import { Car, Zap, User, Settings, Heart, Home, Search, Calendar, Bell, Loader2, LogOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import OnboardingForm from "./_components/OnboardingForm"
 import DriverDashboard from "./_components/DriverDashboard"
 import StationDetails from "./_components/StationDetails"
 import ReservationFlow from "./_components/ReservationFlow"
+import LocationPermission from "./_components/LocationPermission"
 import {
   Sidebar,
   SidebarContent,
@@ -25,10 +25,22 @@ import {
   SidebarInset,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
+import type { CarOwner, Station } from "./types"
 
-import type { CarOwner, Station } from "./types" // ensure types file exports these
+/* ---------- GENERIC LOADING COMPONENT ---------- */
+const LoadingState = ({ message }: { message: string }) => (
+  <div className="flex h-full w-full items-center justify-center bg-gray-50">
+    <div className="flex flex-col items-center gap-4">
+      <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
+      <p className="text-gray-600">{message}</p>
+    </div>
+  </div>
+)
 
-const StationDiscovery = dynamic(() => import("./_components/StationDiscovery"), { ssr: false })
+const StationDiscovery = dynamic(() => import("./_components/StationDiscovery"), {
+  ssr: false,
+  loading: () => <LoadingState message="Loading station discovery..." />,
+})
 
 type DashboardView = "overview" | "discover" | "reservations" | "favorites" | "profile" | "settings"
 
@@ -43,16 +55,7 @@ const api = {
     if (!res.ok) throw new Error("Profile update failed")
     return res.json()
   },
-  getStations: async (location: { lat: number; lng: number }, connectors: string[]) => {
-    const qs = connectors.filter(Boolean).join(",")
-    const res = await fetch(
-      `http://localhost:5000/stations/nearby?lat=${location.lat}&lng=${location.lng}&connectors=${encodeURIComponent(qs)}`,
-    )
-    if (!res.ok) throw new Error("Failed to fetch stations")
-    return res.json()
-  },
   getFavorites: async (userId: string) => {
-    // If backend route not implemented this will 404; we catch caller side.
     const res = await fetch(`http://localhost:5000/car-owners/${userId}/favorites`)
     if (!res.ok) throw new Error("Failed to fetch favorites")
     return res.json()
@@ -75,10 +78,11 @@ function normalizeUser(raw: any): CarOwner | null {
   const id = base.id || base._id
   return {
     id,
-    _id: base._id || id, // keep both if types allow
+    _id: base._id || id,
     fullName: base.fullName || "",
     email: base.email || "",
-    vehicleDetails: base.vehicleDetails ||
+    vehicleDetails:
+      base.vehicleDetails ||
       base.vehicle || {
         make: "",
         model: "",
@@ -100,53 +104,48 @@ function isProfileComplete(u: CarOwner) {
 }
 
 /* ---------- COMPONENT ---------- */
-export default function SignInPage() {
+export default function DriverPage() {
   const [user, setUser] = useState<CarOwner | null>(null)
   const [loadingUser, setLoadingUser] = useState(true)
 
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null)
-  const [loadingLocation, setLoadingLocation] = useState(true)
-  const [stations, setStations] = useState<Station[]>([])
+  const [locationPending, setLocationPending] = useState(false)
+  const [locationError, setLocationError] = useState<string | null>(null)
+
   const [favorites, setFavorites] = useState<string[]>([])
 
   const [selectedStation, setSelectedStation] = useState<Station | null>(null)
   const [reservationFlow, setReservationFlow] = useState<{ station: Station; chargerId: string } | null>(null)
   const [currentView, setCurrentView] = useState<DashboardView>("overview")
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+
   const [notifications, setNotifications] = useState<any[]>([])
   const [showNotifications, setShowNotifications] = useState(false)
   const [loadingNotifications, setLoadingNotifications] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
-  const [isRefreshing, setIsRefreshing] = useState(false)
-  const [swipeDirection, setSwipeDirection] = useState<"left" | "right" | null>(null)
-  const [touchStartY, setTouchStartY] = useState(0)
-  const [showQuickActions, setShowQuickActions] = useState(false)
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
 
-  // Gateway base (fall back to localhost)
   const GATEWAY_BASE = (process.env.NEXT_PUBLIC_GATEWAY_BASE || "http://localhost:3001").replace(/\/$/, "")
 
-  /* ---------- LOAD USER (LOCAL then API) ---------- */
+  /* ---------- LOAD USER ---------- */
   useEffect(() => {
     const run = async () => {
       try {
         const cached = localStorage.getItem("driverUser")
         if (cached) {
           const parsed = normalizeUser(JSON.parse(cached))
-          if (parsed) {
-            setUser(parsed)
-            setLoadingUser(false)
-            return
-          }
+            if (parsed) {
+              setUser(parsed)
+              setLoadingUser(false)
+              return
+            }
         }
         const id = localStorage.getItem("driverUserId")
         if (!id) {
           setLoadingUser(false)
           return
         }
-        // Correct route: /car-owners/profile/:id
         let res = await fetch(`http://localhost:5000/car-owners/profile/${id}`)
         if (!res.ok) {
-          // fallback if you later add /car-owners/:id
           const alt = await fetch(`http://localhost:5000/car-owners/${id}`)
           if (alt.ok) res = alt
           else throw new Error(`Profile fetch failed status=${res.status}`)
@@ -165,7 +164,7 @@ export default function SignInPage() {
     run()
   }, [])
 
-  /* ---------- REDIRECT IF NO USER AFTER LOAD ---------- */
+  /* ---------- REDIRECT IF NO USER ---------- */
   useEffect(() => {
     if (!loadingUser && !user) {
       const hasId = localStorage.getItem("driverUserId")
@@ -175,50 +174,14 @@ export default function SignInPage() {
     }
   }, [loadingUser, user])
 
-  /* ---------- GEOLOCATION (after profile complete or during discovery) ---------- */
+  /* ---------- FAVORITES ---------- */
   useEffect(() => {
-    if (!user) return
-    if (!navigator.geolocation) {
-      setLocation({ lat: 36.8065, lng: 10.1815 })
-      setLoadingLocation(false)
-      return
-    }
-    setLoadingLocation(true)
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude })
-        setLoadingLocation(false)
-      },
-      () => {
-        setLocation({ lat: 36.8065, lng: 10.1815 })
-        setLoadingLocation(false)
-      },
-      { enableHighAccuracy: true, timeout: 8000 },
-    )
-  }, [user])
-
-  /* ---------- FAVORITES (guard if backend route missing) ---------- */
-  useEffect(() => {
-    const uid = user?.id
-    if (!uid) return
+    if (!user?.id) return
     api
-      .getFavorites(uid)
+      .getFavorites(user.id)
       .then((f) => setFavorites(Array.isArray(f) ? f : []))
-      .catch(() => setFavorites([])) // swallow if route not ready
-  }, [user])
-
-  /* ---------- STATIONS ---------- */
-  useEffect(() => {
-    if (!location || !user) return
-    const connectors = [user.vehicleDetails?.primaryConnector, ...(user.vehicleDetails?.adapters || [])].filter(
-      Boolean,
-    ) as string[]
-    if (connectors.length === 0) return
-    api
-      .getStations(location, connectors)
-      .then(setStations)
-      .catch(() => setStations([]))
-  }, [location, user])
+      .catch(() => setFavorites([]))
+  }, [user?.id])
 
   /* ---------- MOBILE DETECTION ---------- */
   useEffect(() => {
@@ -236,62 +199,7 @@ export default function SignInPage() {
     return () => window.removeEventListener("resize", checkMobile)
   }, [])
 
-  /* ---------- REFRESH (PULL) ---------- */
-  const handlePullToRefresh = useCallback(async () => {
-    if (isRefreshing) return
-    setIsRefreshing(true)
-    await new Promise((r) => setTimeout(r, 1000))
-    setIsRefreshing(false)
-    if (location && user) {
-      const connectors = [user.vehicleDetails?.primaryConnector, ...(user.vehicleDetails?.adapters || [])].filter(
-        Boolean,
-      ) as string[]
-      if (connectors.length) {
-        api
-          .getStations(location, connectors)
-          .then(setStations)
-          .catch(() => {})
-      }
-    }
-  }, [isRefreshing, location, user])
-
-  const handleTouchStart = (e: React.TouchEvent) => setTouchStartY(e.touches[0].clientY)
-  const handleTouchMove = (e: React.TouchEvent) => {
-    const diff = e.touches[0].clientY - touchStartY
-    if (diff > 100 && window.scrollY === 0 && !isRefreshing) handlePullToRefresh()
-  }
-
-  /* ---------- SWIPE MENU ---------- */
-  const handleSwipe = (event: any, info: PanInfo) => {
-    const { offset, velocity } = info
-    if (Math.abs(velocity.x) > 500) {
-      if (offset.x > 100 && isMobile && !isMobileMenuOpen) setIsMobileMenuOpen(true)
-      else if (offset.x < -100 && isMobile && isMobileMenuOpen) setIsMobileMenuOpen(false)
-    }
-  }
-
-  /* ---------- KEYBOARD SHORTCUTS ---------- */
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.altKey) {
-        const keyMap: Record<string, DashboardView> = {
-          "1": "overview",
-          "2": "discover",
-          "3": "reservations",
-          "4": "favorites",
-          "5": "profile",
-          "6": "settings",
-        }
-        if (keyMap[e.key]) setCurrentView(keyMap[e.key])
-      }
-      if (e.key === "Escape" && isMobileMenuOpen) setIsMobileMenuOpen(false)
-    }
-    window.addEventListener("keydown", handler)
-    return () => window.removeEventListener("keydown", handler)
-  }, [isMobileMenuOpen])
-
   /* ---------- NOTIFICATIONS ---------- */
-  // Fetch notifications (memoized so we can reuse)
   const fetchNotifications = useCallback(async () => {
     if (!user?.id) return
     try {
@@ -310,35 +218,12 @@ export default function SignInPage() {
     }
   }, [user?.id, GATEWAY_BASE])
 
-  // Initial + polling load
   useEffect(() => {
     fetchNotifications()
     if (!user?.id) return
     const interval = setInterval(fetchNotifications, 60000)
     return () => clearInterval(interval)
   }, [fetchNotifications, user?.id])
-
-  // Optional simple SSE (ignore errors silently)
-  useEffect(() => {
-    if (!user?.id) return
-    const url = `${GATEWAY_BASE}/api/notifications-stream?userId=${encodeURIComponent(user.id)}`
-    let es: EventSource | null = null
-    try {
-      es = new EventSource(url)
-      es.onmessage = (evt) => {
-        if (!evt.data) return
-        try {
-          const payload = JSON.parse(evt.data)
-          if (payload.type === "new" && payload.notification) {
-            setNotifications((prev) => [payload.notification, ...prev].slice(0, 100))
-          }
-        } catch {}
-      }
-    } catch {}
-    return () => {
-      es?.close()
-    }
-  }, [user?.id, GATEWAY_BASE])
 
   async function markNotificationRead(id: string) {
     try {
@@ -365,13 +250,9 @@ export default function SignInPage() {
 
   const unreadCount = notifications.filter((n) => !(n.read ?? n.isRead)).length
 
-  /* ---------- LOADING & ERROR STATES ---------- */
+  /* ---------- LOADING STATES ---------- */
   if (loadingUser) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg text-gray-600">Loading your profile...</div>
-      </div>
-    )
+    return <LoadingState message="Loading your profile..." />
   }
 
   if (!user) {
@@ -392,7 +273,7 @@ export default function SignInPage() {
     )
   }
 
-  /* ---------- ONBOARDING WHEN INCOMPLETE ---------- */
+  /* ---------- ONBOARDING ---------- */
   if (!isProfileComplete(user)) {
     return (
       <OnboardingForm
@@ -416,6 +297,37 @@ export default function SignInPage() {
     )
   }
 
+  /* ---------- LOCATION PERMISSION GATE ---------- */
+  if (!location) {
+    return (
+      <LocationPermission
+        onLocation={(loc) => {
+          setLocation(loc)
+          setLocationPending(false)
+        }}
+        onRequest={() => {
+          setLocationPending(true)
+          setLocationError(null)
+        }}
+        onError={(msg: string) => {
+          setLocationPending(false)
+          setLocationError(msg || "Unable to get location.")
+        }}
+      >
+        {locationPending ? (
+          <LoadingState message="Loading your location..." />
+        ) : locationError ? (
+          <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 gap-4">
+            <p className="text-sm text-red-600">{locationError}</p>
+            <Button onClick={() => setLocationPending(true)} size="sm">
+              Retry
+            </Button>
+          </div>
+        ) : null}
+      </LocationPermission>
+    )
+  }
+
   /* ---------- NAV ITEMS ---------- */
   const navigationItems = [
     { id: "overview", label: "Overview", icon: Home, badge: null, shortcut: "Alt+1" },
@@ -426,6 +338,7 @@ export default function SignInPage() {
     { id: "settings", label: "Settings", icon: Settings, badge: null, shortcut: "Alt+6" },
   ] as const
 
+  /* ---------- CONTENT RENDERER ---------- */
   const renderContent = () => {
     const safeUpdateFavorites = async (newFavs: string[]) => {
       if (!user?.id) return
@@ -435,20 +348,10 @@ export default function SignInPage() {
       } catch {}
     }
     if (currentView === "discover") {
-      if (loadingLocation) {
-        return (
-          <div className="h-full flex flex-col items-center justify-center text-gray-600">
-            <Loader2 className="w-12 h-12 animate-spin text-emerald-500 mb-4" />
-            <p className="text-lg font-medium">Finding your location...</p>
-            <p className="text-sm text-gray-500">Please wait while we pinpoint your position.</p>
-          </div>
-        )
-      }
       return (
         <StationDiscovery
           user={user}
           location={location}
-          stations={stations}
           onSelectStation={setSelectedStation}
           favorites={favorites}
           setFavorites={safeUpdateFavorites}
@@ -460,7 +363,6 @@ export default function SignInPage() {
         user={user}
         favorites={favorites}
         setFavorites={safeUpdateFavorites}
-        stations={stations}
         activeView={currentView}
         setActiveView={setCurrentView}
       />
@@ -496,23 +398,13 @@ export default function SignInPage() {
                   </div>
                 </div>
                 {user?.vehicleDetails?.make && (
-                  <div className="flex items-center mb-3">
+                  <div className="flex items-center">
                     <Car className="w-4 h-4 text-emerald-600 mr-2" />
                     <span className="text-sm text-emerald-700 font-medium">
                       {user.vehicleDetails.make} {user.vehicleDetails.model}
                     </span>
                   </div>
                 )}
-                <div className="grid grid-cols-2 gap-3 text-center">
-                  <div className="bg-white/80 rounded-lg p-2">
-                    <div className="text-lg font-bold text-emerald-600">{favorites.length}</div>
-                    <div className="text-xs text-gray-600">Favorites</div>
-                  </div>
-                  <div className="bg-white/80 rounded-lg p-2">
-                    <div className="text-lg font-bold text-blue-600">{stations.length}</div>
-                    <div className="text-xs text-gray-600">Nearby</div>
-                  </div>
-                </div>
               </div>
             </div>
 
@@ -559,10 +451,6 @@ export default function SignInPage() {
             <div className="flex items-center gap-4">
               <SidebarTrigger />
               <div className="flex items-center gap-2">
-                <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100 px-3 py-1">
-                  <Search className="h-3 w-3 mr-1" />
-                  {stations.length} Station{stations.length !== 1 ? "s" : ""} Nearby
-                </Badge>
                 {unreadCount > 0 && (
                   <Button
                     variant="ghost"
@@ -581,12 +469,6 @@ export default function SignInPage() {
           </div>
 
           <div className="p-6">
-            <div className="absolute inset-0 -z-10 overflow-hidden">
-              <div className="absolute -top-20 -left-16 h-80 w-80 rounded-full bg-lime-200 blur-3xl opacity-30" />
-              <div className="absolute top-40 -right-16 h-[26rem] w-[26rem] rounded-full bg-emerald-200 blur-3xl opacity-30" />
-              <div className="absolute -bottom-24 left-1/2 -translate-x-1/2 h-[28rem] w-[28rem] rounded-full bg-amber-100 blur-3xl opacity-30" />
-            </div>
-
             <motion.div
               key={currentView}
               initial={{ opacity: 0, y: 20 }}
@@ -600,15 +482,10 @@ export default function SignInPage() {
         </SidebarInset>
       </div>
 
-      {/* Keep existing modals and overlays */}
+      {/* Modals / Overlays */}
       <AnimatePresence>
         {selectedStation && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50"
-          >
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50">
             <StationDetails
               station={selectedStation}
               user={user}
@@ -624,12 +501,7 @@ export default function SignInPage() {
 
       <AnimatePresence>
         {reservationFlow && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50"
-          >
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50">
             <ReservationFlow
               station={reservationFlow.station}
               chargerId={reservationFlow.chargerId}

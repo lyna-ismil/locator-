@@ -37,54 +37,77 @@ const CONNECTORS: string[] = Array.isArray(CONNECTOR_TYPES) ? (CONNECTOR_TYPES a
 const BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5000").replace(/\/$/, "")
 
 const api = {
-  getHistory: async (email: string, timeoutMs = 7000): Promise<Reservation[]> => {
-    const endpoints = [
-      `${BASE}/sessions?email=${encodeURIComponent(email)}`,
-      `${BASE}/charging-sessions?email=${encodeURIComponent(email)}`,
-      `${BASE}/sessions?userEmail=${encodeURIComponent(email)}`,
-    ]
+  getHistory: async (email: string, userId?: string, timeoutMs = 7000): Promise<Reservation[]> => {
+    const qsEmail = encodeURIComponent(email)
+    const qsUserId = userId ? encodeURIComponent(userId) : ""
+    // Probe multiple possible service endpoints (adjust as your services evolve)
+    const endpoints: string[] = [
+      `${BASE}/sessions?email=${qsEmail}`,
+      `${BASE}/sessions?userEmail=${qsEmail}`,
+      `${BASE}/charging-sessions?email=${qsEmail}`,
+      `${BASE}/charging-sessions?userEmail=${qsEmail}`,
+      userId ? `${BASE}/charging-sessions?userId=${qsUserId}` : "",
+      userId ? `${BASE}/sessions?userId=${qsUserId}` : "",
+      `${BASE}/sessions/history?email=${qsEmail}`,
+    ].filter(Boolean)
 
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
-    try {
-      let data: any = null
-      for (const url of endpoints) {
-        try {
-          const res = await fetch(url, { signal: controller.signal })
-          if (!res.ok) continue
-          data = await res.json()
-          break
-        } catch (e) {
-          if ((e as any).name === "AbortError") throw e
-          // try next endpoint
+    const tryFetch = async (url: string) => {
+      try {
+        const res = await fetch(url, { signal: controller.signal, headers: { Accept: "application/json" } })
+        if (!res.ok) {
+          // Treat 404/204 as empty (skip)
+          if (res.status === 404 || res.status === 204) return null
+          return null
         }
+        const text = await res.text()
+        if (!text) return null
+        try {
+          return JSON.parse(text)
+        } catch {
+          return null
+        }
+      } catch (e: any) {
+        if (e?.name === "AbortError") throw e
+        return null
       }
+    }
 
-      clearTimeout(timeout)
-      if (!data) throw new Error("No session data returned from any endpoint")
+    let data: any = null
+    for (const url of endpoints) {
+      data = await tryFetch(url)
+      if (data) {
+        break
+      }
+    }
 
-      const sessions: any[] = Array.isArray(data) ? data : data.sessions || data.items || []
-      return sessions.map((s: any) => ({
-        id: s._id || s.id || s.sessionId || `${s.stationId}-${s.chargerId}-${s.date || s.createdAt}`,
-        stationId: s.stationName || s.station?.name || s.stationId || s.relatedStation || "Unknown Station",
-        chargerId: s.chargerId || s.connectorId || s.charger?.id || "",
-        expiresAt: s.expiresAt || s.endTime || s.updatedAt || s.createdAt || new Date().toISOString(),
-        paymentMethod: s.paymentMethod || s.payment?.method || "OnSite",
-        status: s.status || "completed",
-        cost: typeof s.cost === "number" ? s.cost : Number.parseFloat(s.price || 0) || 0,
-        duration: s.duration || s.minutes || 0,
-        energyDelivered: s.energyDelivered || s.energy || s.kwh || 0,
-        date:
-          s.date ||
-          (s.createdAt ? new Date(s.createdAt).toISOString().split("T")[0] : new Date().toISOString().split("T")[0]),
-      }))
-    } catch (err) {
-      clearTimeout(timeout)
-      // Log and return empty array so UI can show "no history"
-      console.error("getHistory failed:", err)
+    clearTimeout(timeout)
+
+    if (!data) {
+      // Graceful fallback: no data -> empty history
+      console.warn("[getHistory] No session payload from probed endpoints; returning empty []")
       return []
     }
+
+    const rawSessions: any[] = Array.isArray(data) ? data : data.sessions || data.items || data.data || []
+    if (!Array.isArray(rawSessions) || rawSessions.length === 0) return []
+
+    return rawSessions.map((s: any) => ({
+      id: s._id || s.id || s.sessionId || `${s.stationId || "station"}-${s.chargerId || "charger"}-${s.date || s.createdAt || Date.now()}`,
+      stationId: s.stationName || s.station?.name || s.stationId || s.relatedStation || "Unknown Station",
+      chargerId: s.chargerId || s.connectorId || s.charger?.id || "",
+      expiresAt: s.expiresAt || s.endTime || s.updatedAt || s.createdAt || new Date().toISOString(),
+      paymentMethod: s.paymentMethod || s.payment?.method || "OnSite",
+      status: s.status || "completed",
+      cost: typeof s.cost === "number" ? s.cost : Number.parseFloat(s.price || 0) || 0,
+      duration: s.duration || s.minutes || 0,
+      energyDelivered: s.energyDelivered || s.energy || s.kwh || 0,
+      date:
+        s.date ||
+        (s.createdAt ? new Date(s.createdAt).toISOString().split("T")[0] : new Date().toISOString().split("T")[0]),
+    }))
   },
 
   // keep other api methods unchanged
@@ -116,9 +139,25 @@ const api = {
     return await res.json()
   },
   getFavorites: async (userId: string): Promise<string[]> => {
-    const res = await fetch(`${BASE}/car-owners/${userId}/favorites`)
-    if (!res.ok) throw new Error("Failed to fetch favorites")
-    return await res.json()
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 5000)
+    try {
+      const res = await fetch(`${BASE}/car-owners/${userId}/favorites`, { signal: controller.signal })
+      if (res.status === 404) return []
+      if (!res.ok) {
+        console.warn("[getFavorites] non-OK response:", res.status)
+        return []
+      }
+      const data = await res.json()
+      if (Array.isArray(data)) return data
+      if (Array.isArray((data as any).favorites)) return (data as any).favorites
+      return []
+    } catch (e: any) {
+      if (e?.name !== "AbortError") console.warn("[getFavorites] fetch failed:", e)
+      return []
+    } finally {
+      clearTimeout(timeout)
+    }
   },
   updateFavorites: async (userId: string, favorites: string[]) => {
     const res = await fetch(`${BASE}/car-owners/${userId}/favorites`, {
@@ -231,7 +270,7 @@ export default function DriverDashboard({
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
-    api.getHistory(user.email).then(setHistory)
+    api.getHistory(user.email, user.id).then(setHistory)
     api.getFavorites(user.id).then(setFavorites)
   }, [user.email, user.id])
 

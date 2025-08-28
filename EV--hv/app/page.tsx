@@ -29,6 +29,17 @@ import { FaFacebook, FaTwitter, FaLinkedin, FaInstagram } from "react-icons/fa"
 import { apiFetch } from "@/lib/api"
 import { useRouter } from "next/navigation"
 
+interface Station {
+  id: string
+  name: string
+  location: { lat: number; lng: number }
+  availability?: number
+  network?: string
+  pricing?: string
+  connectors?: any[]
+  [k: string]: any
+}
+
 export default function HomePage() {
   const router = useRouter()
 
@@ -181,6 +192,49 @@ export default function HomePage() {
       setError("Failed to create account. Please check your input and try again.");
     }
   }
+
+  // Stations data state
+  const [stations, setStations] = useState<Station[]>([])
+  const [stationsLoading, setStationsLoading] = useState(false)
+  const [stationsError, setStationsError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    async function fetchStations() {
+      setStationsLoading(true)
+      setStationsError(null)
+      try {
+        const data = await apiFetch("/stations")
+        if (!Array.isArray(data)) return
+        const formatted = data
+          .filter((s: any) => s?.location?.coordinates?.length === 2)
+          .map((s: any) => ({
+            id: s._id,
+            name: s.stationName || "Unnamed Station",
+            location: {
+              lat: s.location.coordinates[1],
+              lng: s.location.coordinates[0],
+            },
+            availability: Array.isArray(s.connectors)
+              ? s.connectors.filter((c: any) => c.status === "Available").length
+              : 0,
+            network: s.network,
+            pricing: s.pricing?.perkWh ? `${s.pricing.perkWh} TND/kWh` : undefined,
+            connectors: s.connectors,
+          }))
+        if (!cancelled) setStations(formatted)
+      } catch (e: any) {
+        if (!cancelled) setStationsError("Failed to load stations")
+        console.error("Stations fetch failed:", e)
+      } finally {
+        if (!cancelled) setStationsLoading(false)
+      }
+    }
+    fetchStations()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   return (
     <div className="min-h-screen bg-white text-gray-900">
@@ -364,7 +418,15 @@ export default function HomePage() {
             </p>
           </div>
           <div className="mt-8">
-            <MapTunisia height={520} />
+            {stationsError && (
+              <div className="mb-4 text-sm text-red-600">{stationsError}</div>
+            )}
+            <MapTunisia
+              stations={stations}
+              height={520}
+              loading={stationsLoading}
+              emptyMessage={!stationsLoading && stations.length === 0 ? "No stations found" : undefined}
+            />
           </div>
         </div>
       </section>
