@@ -597,7 +597,11 @@ export function EditStationModal({ station, onClose, onStationUpdated }: EditSta
               <div className="space-y-3">
                 <h4 className="text-sm font-medium text-gray-700">Connectors</h4>
                 {(formData.connectors || []).map((c:any, i:number) => (
-                  <div key={`${c._id || c.type}-${i}`} className="grid md:grid-cols-6 gap-2 items-center bg-gray-50 p-3 rounded">
+                  // FIX: stable key uses connector _id, fallback for unsaved ones
+                  <div
+                    key={c._id || c.id || `new-connector-${i}`}
+                    className="grid md:grid-cols-6 gap-2 items-center bg-gray-50 p-3 rounded"
+                  >
                     <select
                       className="input"
                       value={c.type}

@@ -6,6 +6,16 @@ import { Badge } from "@/components/ui/badge"
 import { Car, Zap, AlertTriangle, MapPin, Star, MessageSquare, Coffee, Wifi, Utensils, ShoppingBag } from "lucide-react"
 import type { Station, CarOwner, Connector } from "../types"
 
+function addressToString(raw: any): string {
+  if (!raw) return ""
+  if (typeof raw === "string") return raw
+  if (typeof raw === "object") {
+    const { street, line1, line2, city, state, zip, zipCode, country } = raw
+    return [street || line1, line2, city, state, zip || zipCode, country].filter(Boolean).join(", ")
+  }
+  return String(raw)
+}
+
 export default function StationDetails({
   station, // now accept full station object
   user,
@@ -67,6 +77,8 @@ export default function StationDetails({
     return () => ac.abort()
   }, [station.id, BASE])
 
+  const addressString = addressToString(station.address)
+
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl border-0">
@@ -83,7 +95,7 @@ export default function StationDetails({
           <div className="pr-8">
             <CardTitle className="text-2xl font-bold text-gray-800 mb-2">{station.name}</CardTitle>
             <CardDescription className="text-lg text-gray-600">
-              {station.network} {station.address ? `• ${station.address}` : ""}
+              {station.network} {station.address ? `• ${addressString}` : ""}
             </CardDescription>
           </div>
         </CardHeader>
@@ -164,7 +176,10 @@ export default function StationDetails({
             <h3 className="font-semibold text-gray-800 mb-3">Available Chargers</h3>
             <div className="space-y-3">
               {compatibleChargers.map((c, index) => (
-                <Card key={c.id ?? `${c.type}-${c.power}-${index}`} className="border-emerald-200">
+                <Card
+                  key={c._id || c.id || `${station._id}-connector-${index}`}
+                  className="border-emerald-200"
+                >
                   <CardContent className="p-4">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">

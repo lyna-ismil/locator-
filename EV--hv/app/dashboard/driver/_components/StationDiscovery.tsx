@@ -25,6 +25,8 @@ import {
   X,
 } from "lucide-react"
 import type { CarOwner, ConnectorType, Station, Connector } from "../types"
+import { normalizeConnector } from "@/app/utils/normalizeConnector"
+import { Switch } from "@/components/ui/switch"
 
 const DashboardMap = dynamic(() => import("@/components/map/dashboard-map"), {
   ssr: false,
@@ -62,12 +64,18 @@ function adaptBackendStation(raw: any, userLoc: { lat: number; lng: number } | n
   const lng = Array.isArray(coord) && isFinite(coord?.[0]) ? +coord[0] : undefined
   const lat = Array.isArray(coord) && isFinite(coord?.[1]) ? +coord[1] : undefined
 
-  const connectors = (raw.connectors || []).map((c: any, idx: number) => ({
-    id: c._id || `${raw._id}-c${idx}`,
-    type: c.type,
-    power: c.powerKW,
-    status: (c.status || "offline").toLowerCase(),
-  }))
+  // PRESERVE backend _id; also surface as id so downstream components have a 24-hex id
+  const backendId = raw._id || raw.id
+
+  const connectors = (raw.connectors || []).map((c: any, idx: number) => {
+    return {
+      id: c._id || c.id || `${backendId}-c${idx}`, // Use connector's own id if present
+      backendId: c._id || c.id || `${backendId}-c${idx}`,
+      type: normalizeConnector(c.type),
+      power: c.powerKW,
+      status: (c.status || "offline").toLowerCase(),
+    }
+  })
 
   const amenitiesArr: string[] = []
   if (raw.amenities) {
@@ -90,20 +98,23 @@ function adaptBackendStation(raw: any, userLoc: { lat: number; lng: number } | n
     distance = haversine(userLoc.lat, userLoc.lng, lat, lng)
   }
 
+  // return MUST include both id and _id (ReservationFlow expects _id for ObjectId test)
   return {
-    id: raw._id || raw.id,
-    name: raw.stationName || raw.name || "Unnamed",
-    network: raw.network || "Unknown",
-    address: `${raw.address?.street || ""} ${raw.address?.city || ""}`.trim(),
-    distance,
-    pricing: pricingDisplay,
-    availability: connectors.filter((c: Connector) => c.status === "available").length,
-    operatingHours: "",
+    id: backendId,          // ensure id is the Mongo ObjectId
+    _id: backendId,         // keep original for safety
+    name: raw.stationName || raw.name || "Unnamed Station",
+    address: raw.address || raw.locationText || "",
+    location: { lat: lat || 0, lng: lng || 0 },
     connectors,
     amenities: amenitiesArr,
-    photos: raw.photoUrl ? [raw.photoUrl] : [],
-    location: { lat: lat ?? 0, lng: lng ?? 0 },
-  }
+    pricing: pricingDisplay,
+    availability: typeof raw.availability === "number" ? raw.availability : undefined,
+    distance,
+    rating: raw.rating,
+    reviews: raw.reviews,
+    photos: raw.photos,
+    network: raw.network || raw.provider || "" // <-- Added network property
+  } as Station
 }
 
 export default function StationDiscovery({ user, location, onSelectStation, favorites, setFavorites }: Props) {
@@ -112,13 +123,16 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
   const [sortBy, setSortBy] = useState<SortOption>("distance")
   const [showFilters, setShowFilters] = useState(false)
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null)
+  // Default: no filtering (maxDistance = 0 disables distance filter)
   const [filters, setFilters] = useState({
-    maxDistance: 10,
+    maxDistance: 0,
     minPower: 0,
     networks: [] as string[],
     amenities: [] as string[],
     availableOnly: false,
   })
+  // Optional toggle: limit to only connectors compatible with user vehicle
+  const [onlyCompatible, setOnlyCompatible] = useState(false)
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
   const [isOffline, setIsOffline] = useState<boolean>(!navigator.onLine)
 
@@ -139,7 +153,8 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
   const FETCH_TTL_MS = 60_000
   const MIN_INTERVAL_MS = 8_000
   const FETCH_TIMEOUT_MS = 7_000
-  const MAX_RESULTS = 150
+  // Large upper guard (not a slice target anymore, just safety)
+  const HARD_CAP = 10000
 
   // simple backoff base (seconds)
   const BASE_BACKOFF = 5
@@ -156,38 +171,18 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
     </div>
   )
 
-  function normalizeConnector(t?: string): ConnectorType | string {
-    if (!t) return ""
-    const up = t.replace(/[\s_-]/g, "").toUpperCase()
-    if (up === "TYPE2" || up === "MENNEKES") return "TYPE2"
-    if (up === "TYPE1" || up === "J1772") return "TYPE1"
-    if (up.startsWith("CCS2")) return "CCS2"
-    if (up.startsWith("CCS1")) return "CCS1"
-    if (up.startsWith("CCS")) return "CCS"
-    if (up === "CHADEMO") return "CHADEMO"
-    if (up === "TESLA") return "TESLA"
-    if (up === "GBT" || up === "GB_T") return "GB_T"
-    if (up.includes("SCHUKO")) return "SCHUKO"
-    return up
-  }
-
-  const fetchNearby = useCallback(async (force = false) => {
-    if (!location) return
+  const fetchStations = useCallback(async (force = false) => {
     if (isOffline) return
     const now = Date.now()
-    const vehicle = (user as any)?.vehicleDetails ?? (user as any)?.vehicle
-    const driverConnectorsRaw = [vehicle?.primaryConnector, ...(vehicle?.adapters || [])].filter(Boolean).join(",")
-    const cacheKey = `${location.lat.toFixed(4)},${location.lng.toFixed(4)}|${driverConnectorsRaw}`
+    // Cache key no longer depends on connectors since we fetch ALL
+    const cacheKey = `ALL_STATIONS|ALL`
 
-    // Serve cached immediately (stale‑while‑revalidate)
     if (cacheRef.current && cacheRef.current.key === cacheKey) {
       setStations(cacheRef.current.data)
       if (!force && now - cacheRef.current.ts < FETCH_TTL_MS) return
     }
-    // Throttle unless forced by staleness
     if (!force && (inFlightRef.current || now - lastFetchRef.current < MIN_INTERVAL_MS)) return
 
-    // Abort any previous request
     if (activeControllerRef.current) {
       try { activeControllerRef.current.abort() } catch {}
     }
@@ -203,33 +198,69 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
       retryAttemptRef.current = 0
 
       const base = (process.env.NEXT_PUBLIC_STATION_SERVICE_URL || "http://localhost:5000").replace(/\/+$/, "")
-      const radius = 25000
-      const url = `${base}/stations/nearby?lat=${location.lat}&lng=${location.lng}&radius=${radius}&connectors=${encodeURIComponent(
-        driverConnectorsRaw,
-      )}`
+      // Attempt to pull ALL pages. Supports:
+      // 1) /stations?limit=...&page=...
+      // 2) /stations?cursor=...
+      // Falls back to single request if pagination unsupported.
+      const LIMIT = 500
+      let page = 1
+      let done = false
+      const aggregated: any[] = []
+      const seen = new Set<string>()
       const controller = new AbortController()
       activeControllerRef.current = controller
-      const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
-      let res = await fetch(url, { cache: "no-store", signal: controller.signal })
-      if (!res.ok) {
-        // Fallback to generic listing if nearby endpoint unsupported
-        if (res.status === 404) {
-          const fallback = `${base}/stations`
-          res = await fetch(fallback, { cache: "no-store", signal: controller.signal })
+
+      while (!done) {
+        const pageUrl = `${base}/stations?limit=${LIMIT}&page=${page}`
+        const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+        const res = await fetch(pageUrl, { cache: "no-store", signal: controller.signal })
+        clearTimeout(timeout)
+        if (!res.ok) {
+          if (page === 1) {
+            const txt = await res.text().catch(() => res.statusText)
+            throw new Error(`HTTP ${res.status} ${txt}`)
+          } else {
+            break
+          }
+        }
+        const raw = await res.json()
+
+        // Normalize array shape
+        const items: any[] = Array.isArray(raw)
+          ? raw
+          : raw.items || raw.data || raw.results || []
+
+        for (const it of items) {
+          const id = it._id || it.id
+            || JSON.stringify([it.stationName, it.name, it.address?.street || "", it.location?.coordinates || []])
+          if (!seen.has(id)) {
+            seen.add(id)
+            aggregated.push(it)
+            if (aggregated.length >= HARD_CAP) {
+              done = true
+              break
+            }
+          }
+        }
+
+        // Pagination termination heuristics
+        const totalPages = raw.totalPages || raw.total_page || raw.pages
+        if (
+          items.length < LIMIT || // short page
+          !items.length ||
+          (totalPages && page >= totalPages) ||
+          page >= 50 // hard safety
+        ) {
+          done = true
+        } else {
+          page += 1
         }
       }
-      if (!res.ok) {
-        const txt = await res.text().catch(() => res.statusText)
-        throw new Error(`HTTP ${res.status} ${txt}`)
-      }
 
-      const raw = await res.json()
-      clearTimeout(timeout)
-      const arr = Array.isArray(raw) ? raw : (raw.data || raw.items || [])
-      const limited = arr.slice(0, MAX_RESULTS)
-      const adapted = limited
+      const adapted = aggregated
         .map((d: any) => adaptBackendStation(d, location))
         .filter((s: Station) => isFinite(s.location.lat) && isFinite(s.location.lng))
+      
       setStations(adapted)
       cacheRef.current = { key: cacheKey, ts: Date.now(), data: adapted }
       lastFetchRef.current = Date.now()
@@ -237,7 +268,6 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
     } catch (e: any) {
       if (e?.name === "AbortError") return
       setLoadError(e.message || "Error loading stations")
-      // schedule retry with exponential backoff (cap 60s)
       retryAttemptRef.current += 1
       const delaySec = Math.min(BASE_BACKOFF * 2 ** (retryAttemptRef.current - 1), 60)
       setRetryAfter(delaySec)
@@ -249,7 +279,7 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
         if (remain <= 0) {
           clearInterval(retryTimerRef.current!)
           setRetryAfter(null)
-          fetchNearby()
+          fetchStations()
         }
       }, 1000)
     } finally {
@@ -258,15 +288,15 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
         inFlightRef.current = false
       }
     }
-  }, [location, user, isOffline])
+  }, [user, isOffline, location])
 
   useEffect(() => {
-    fetchNearby()
-  }, [fetchNearby])
+    fetchStations()
+  }, [fetchStations])
 
   // Online / offline handling
   useEffect(() => {
-    const goOnline = () => { setIsOffline(false); fetchNearby(true) }
+    const goOnline = () => { setIsOffline(false); fetchStations(true) }
     const goOffline = () => setIsOffline(true)
     window.addEventListener("online", goOnline)
     window.addEventListener("offline", goOffline)
@@ -274,7 +304,7 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
       window.removeEventListener("online", goOnline)
       window.removeEventListener("offline", goOffline)
     }
-  }, [fetchNearby])
+  }, [fetchStations])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -288,6 +318,7 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
 
   const filteredStations = useMemo(() => {
     if (!stations.length) return []
+    // Start with all stations (no implicit filtering)
     let filtered = [...stations]
 
     if (searchQuery) {
@@ -299,7 +330,10 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
           (s.address || "").toLowerCase().includes(q),
       )
     }
-    if (filters.maxDistance > 0) filtered = filtered.filter((s) => (s.distance ?? 0) <= filters.maxDistance)
+    // Distance filter only applied if user sets a positive maxDistance
+    if (filters.maxDistance > 0) {
+      filtered = filtered.filter((s) => (s.distance ?? Infinity) <= filters.maxDistance)
+    }
     if (filters.minPower > 0) filtered = filtered.filter((s) => s.connectors.some((c) => c.power >= filters.minPower))
     if (filters.networks.length) filtered = filtered.filter((s) => filters.networks.includes(s.network))
     if (filters.amenities.length)
@@ -308,10 +342,17 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
       )
     if (filters.availableOnly) filtered = filtered.filter((s) => (s.availability ?? 0) > 0)
 
-    const vehicle = (user as any)?.vehicleDetails ?? (user as any)?.vehicle
-    if (vehicle?.primaryConnector) {
-      const owned = new Set([vehicle.primaryConnector, ...(vehicle.adapters || [])].map(normalizeConnector))
-      filtered = filtered.filter((s) => s.connectors?.some((c) => owned.has(normalizeConnector(c.type))))
+    // Apply compatibility filter only if user toggles it on
+    if (onlyCompatible) {
+      const vehicle = (user as any)?.vehicleDetails ?? (user as any)?.vehicle
+      if (vehicle?.primaryConnector) {
+        const owned = new Set(
+          [vehicle.primaryConnector, ...(vehicle.adapters || [])]
+            .filter(Boolean)
+            .map((t: string) => normalizeConnector(t)),
+        )
+        filtered = filtered.filter((s) => s.connectors?.some((c) => owned.has(c.type)))
+      }
     }
 
     filtered.sort((a: any, b: any) => {
@@ -336,7 +377,7 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
     })
 
     return filtered
-  }, [stations, searchQuery, filters, sortBy, favorites, user])
+  }, [stations, searchQuery, filters, sortBy, favorites, user, onlyCompatible])
 
   function toggleFavorite(stationId: string) {
     setFavorites(favorites.includes(stationId) ? favorites.filter((id) => id !== stationId) : [...favorites, stationId])
@@ -547,6 +588,14 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
               Filters
               {showFilters ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </Button>
+            <Button
+              variant={onlyCompatible ? "default" : "outline"}
+              size="sm"
+              onClick={() => setOnlyCompatible((v) => !v)}
+              className={`shadow-sm ${onlyCompatible ? "bg-emerald-600 text-white" : "bg-white/80 backdrop-blur-sm"}`}
+            >
+              {onlyCompatible ? "Compatible ✓" : "All Connectors"}
+            </Button>
             <Select value={sortBy} onValueChange={(v: any) => setSortBy(v)}>
               <SelectTrigger className="w-40 bg-white/80 backdrop-blur-sm shadow-sm border-gray-200">
                 <SelectValue placeholder="Sort by" />
@@ -561,11 +610,27 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
             <Button
               variant="outline"
               size="sm"
-              onClick={() => fetchNearby(true)}
+              onClick={() => fetchStations(true)}
               disabled={loadingStations || isOffline}
               className="shadow-sm bg-white/80 backdrop-blur-sm"
             >
               {loadingStations ? "Refreshing..." : "Refresh"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setFilters({
+                  maxDistance: 0,
+                  minPower: 0,
+                  networks: [],
+                  amenities: [],
+                  availableOnly: false,
+                })
+              }
+              className="text-xs"
+            >
+              Reset
             </Button>
           </div>
 
@@ -678,7 +743,7 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-lg font-bold text-gray-800 flex items-center gap-2">
                       <MapPin className="w-5 h-5 text-emerald-600" />
-                      Nearby Stations
+                      All Stations
                     </CardTitle>
                     {selectedStationId && (
                       <Button
@@ -692,7 +757,7 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
                     )}
                   </div>
                 </CardHeader>
-                <CardContent className="max-h-48 overflow-y-auto">
+                <CardContent className="max-h-72 overflow-y-auto">
                   {filteredStations.length === 0 ? (
                     loadingStations ? (
                       <div className="grid grid-cols-2 gap-3">
@@ -708,7 +773,7 @@ export default function StationDiscovery({ user, location, onSelectStation, favo
                     )
                   ) : (
                     <div className="space-y-3">
-                      {filteredStations.slice(0, 4).map((station) => (
+                      {filteredStations.map((station) => (
                         <div
                           key={station.id}
                           className={`flex items-center justify-between p-4 bg-white/80 backdrop-blur-sm rounded-xl border cursor-pointer hover:border-emerald-300 hover:shadow-md transition-all duration-200 group ${

@@ -22,6 +22,16 @@ function parsePricePerKwh(priceString?: string): number {
   return anyNum ? parseFloat(anyNum[1]) : 0.3
 }
 
+// Add helper near top (already have isObjectId, keep it) or reuse the existing one
+function isObjectId(v: string | undefined | null): v is string {
+  return !!v && /^[a-fA-F0-9]{24}$/.test(v)
+}
+// helper: accept temp ids
+function isAcceptableVehicleId(v: string | undefined | null) {
+  if (!v) return false
+  return isObjectId(v) || v.startsWith("veh_") || v.length >= 8
+}
+
 const api = {
   createReservation: async (reservationData: {
     userId: string
@@ -31,6 +41,7 @@ const api = {
     startTime: string
     endTime: string
   }): Promise<Reservation> => {
+    console.debug("[ReservationFlow] sending reservation", reservationData)  // ADD
     const res = await fetch("http://localhost:5000/reservations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -209,13 +220,51 @@ export default function ReservationFlow({
     })
   }
 
+  // Replace handleConfirm with a safer version
   async function handleConfirm() {
-    const vehicle = user?.vehicleDetails || (user as any).vehicle
-    if (!user || !vehicle) return setError("User or vehicle details are missing.")
-    const carId = vehicle.id || vehicle._id || vehicle.vehicleId
-    if (!carId) return setError("Missing vehicle ID. Update your profile.")
-    const stationId = (station as any).id || (station as any)._id
-    if (!stationId) return setError("Station identifier missing.")
+    const vehicle = user?.vehicleDetails
+    if (!user || !vehicle) {
+      setError("User or vehicle details are missing.")
+      return
+    }
+
+    let carId =
+      (vehicle as any)._id ||
+      vehicle.id ||
+      (vehicle as any).vehicleId
+
+    if (!isAcceptableVehicleId(carId)) {
+      carId = user.id
+    }
+
+    // RELAX: prefer _id but allow id; warn instead of hard-block
+    const stationId = (station as any)._id || (station as any).id
+    // Normalize userId
+    const userId = (user as any).id || (user as any)._id
+    if (!userId) {
+      setError("User ID missing.")
+      return
+    }
+    if (!stationId) {
+      setError("Station ID missing.")
+      return
+    }
+    if (!isObjectId(stationId)) {
+      console.warn("[ReservationFlow] stationId not 24-hex, proceeding anyway:", stationId)
+    }
+
+    const connectorObj: any = station.connectors.find(
+      (c: any) => c.id === chargerId || c.backendId === chargerId || c._id === chargerId,
+    )
+    if (!connectorObj) {
+      setError("Selected connector not found.")
+      return
+    }
+    const connectorId = connectorObj.backendId || connectorObj._id || connectorObj.id
+    if (!connectorId) {
+      setError("Connector ID is missing. Cannot make a reservation.")
+      return
+    }
 
     if (isNaN(scheduledStart.getTime())) {
       setError("Invalid scheduled start time.")
@@ -230,24 +279,29 @@ export default function ReservationFlow({
       return
     }
 
-    const startTime = scheduledStart.toISOString()
-    const endTime = scheduledEnd.toISOString()
-
     setLoading(true)
     setError(null)
     try {
-      const newRes = await api.createReservation({
-        userId: user.id,
+      const startTime = scheduledStart.toISOString()
+      const endTime = scheduledEnd.toISOString()
+
+      const payload = {
+        userId,
         carId,
         stationId,
-        connectorId: chargerId,
+        connectorId,
         startTime,
         endTime,
-      })
+      }
+      console.debug("[ReservationFlow] payload final:", payload) // ADD
+      const newRes = await api.createReservation(payload)
       setReservation(newRes)
       setStep("success")
+      onComplete?.(newRes)
     } catch (e: any) {
+      console.error("[ReservationFlow] Reservation error:", e)
       setError(e?.message || "Reservation failed.")
+      onComplete?.(null)
     } finally {
       setLoading(false)
     }
@@ -262,6 +316,20 @@ export default function ReservationFlow({
   if (step === "success" && reservation) {
     return <ReservationCountdown reservation={reservation} station={station} />
   }
+
+  // helper: convert address object to string
+  function addressToString(raw: any): string {
+    if (!raw) return ""
+    if (typeof raw === "string") return raw
+    if (typeof raw === "object") {
+      const { street, line1, line2, city, state, zip, zipCode, country } = raw
+      return [street || line1, line2, city, state, zip || zipCode, country].filter(Boolean).join(", ")
+    }
+    return String(raw)
+  }
+
+  // When displaying station.address:
+  const safeAddress = addressToString(station.address)
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -320,7 +388,7 @@ export default function ReservationFlow({
                         <div className="flex-1">
                           <div className="flex items-center space-x-2 mb-2">
                             <MapPin className="w-4 h-4 text-gray-500" />
-                            <span className="text-sm text-gray-600">{station.address}</span>
+                            <span className="text-sm text-gray-600">{safeAddress}</span>
                           </div>
                           <div className="flex items-center space-x-4">
                             <Badge className="bg-emerald-100 text-emerald-700">

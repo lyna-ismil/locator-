@@ -53,20 +53,26 @@ export interface Amenities {
 
 export interface Reservation {
   _id: string
-  customerId: string
-  customerName: string
-  customerEmail: string
-  connectorIndex: number
+  userId: string
+  stationId: {
+    _id: string
+    stationName: string
+  }
+  connectorId: string
   startTime: string
   endTime: string
-  status: "pending" | "confirmed" | "active" | "completed" | "cancelled"
-  estimatedCost: number
-  vehicleInfo?: {
+  status: "Confirmed" | "Active" | "Completed" | "Cancelled" | "Expired"
+  vehicleInfo: {
     make: string
     model: string
-    connector: string
+    year: number
+  }
+  customer: {
+    name: string
+    email: string
   }
 }
+
 
 export interface Station {
   _id?: string

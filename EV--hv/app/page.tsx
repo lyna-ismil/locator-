@@ -40,6 +40,56 @@ interface Station {
   [k: string]: any
 }
 
+/* ---------- API HELPERS ---------- */
+const api = {
+  updateProfile: async (id: string, form: Partial<CarOwner>) => {
+    const res = await fetch(`http://localhost:5000/car-owners/profile/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    })
+    if (!res.ok) throw new Error("Profile update failed")
+    return res.json()
+  },
+  getFavorites: async (userId: string) => {
+    const res = await fetch(`http://localhost:5000/car-owners/${userId}/favorites`)
+    if (!res.ok) throw new Error("Failed to fetch favorites")
+    return res.json()
+  },
+  updateFavorites: async (userId: string, favorites: string[]) => {
+    const res = await fetch(`http://localhost:5000/car-owners/${userId}/favorites`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ favorites }),
+    })
+    if (!res.ok) throw new Error("Failed to update favorites")
+    return res.json()
+  },
+  // FIX: restrict to relevant statuses & request populated station data
+  getReservations: async (userId: string): Promise<Reservation[]> => {
+    if (!userId) return []
+    const url = `http://localhost:5000/reservations?userId=${encodeURIComponent(
+      userId
+    )}&status=Confirmed,Active&populate=stationId`
+    const res = await fetch(url)
+    if (!res.ok) {
+      console.warn("[getReservations] non-OK", res.status)
+      return []
+    }
+    const data = await res.json()
+    return Array.isArray(data) ? data : []
+  },
+  cancelReservation: async (reservationId: string) => {
+    const res = await fetch(`http://localhost:5000/reservations/${reservationId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "Cancelled" }),
+    })
+    if (!res.ok) throw new Error("Failed to cancel reservation")
+    return res.json()
+  },
+}
+
 export default function HomePage() {
   const router = useRouter()
 

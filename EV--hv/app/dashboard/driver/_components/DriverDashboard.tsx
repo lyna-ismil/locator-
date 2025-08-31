@@ -27,10 +27,11 @@ import {
   MapPin,
   Zap,
   TrendingUp,
+  Calendar,
 } from "lucide-react"
-import { CONNECTOR_TYPES, type ConnectorType, type VehicleDetails, type Reservation, type Reclamation } from "../types"
+import { CONNECTOR_TYPES, type Reservation, type Reclamation } from "../types"
 
-// FALLBACK: ensure we always have a connector list at runtime
+// FALLBACK connector list
 const DEFAULT_CONNECTORS = ["TYPE1", "TYPE2", "CHAdeMO", "CCS", "TESLA", "GB/T"]
 const CONNECTORS: string[] = Array.isArray(CONNECTOR_TYPES) ? (CONNECTOR_TYPES as string[]) : DEFAULT_CONNECTORS
 
@@ -40,7 +41,6 @@ const api = {
   getHistory: async (email: string, userId?: string, timeoutMs = 7000): Promise<Reservation[]> => {
     const qsEmail = encodeURIComponent(email)
     const qsUserId = userId ? encodeURIComponent(userId) : ""
-    // Probe multiple possible service endpoints (adjust as your services evolve)
     const endpoints: string[] = [
       `${BASE}/sessions?email=${qsEmail}`,
       `${BASE}/sessions?userEmail=${qsEmail}`,
@@ -195,16 +195,18 @@ interface EditableProfile {
 
 export default function DriverDashboard({
   user,
+  reservations,
+  handleCancelReservation,
   favorites,
   setFavorites,
-  stations = [],
   activeView,
   setActiveView,
 }: {
   user: any
+  reservations: Reservation[]
+  handleCancelReservation: (reservationId: string) => void
   favorites: string[]
   setFavorites: (ids: string[]) => void
-  stations?: { _id: string; stationName?: string; address?: any }[]
   activeView: string
   setActiveView: (view: string) => void
 }) {
@@ -267,17 +269,104 @@ export default function DriverDashboard({
     },
   })
   const [savingSettings, setSavingSettings] = useState(false)
+  const [cancelingId, setCancelingId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
-    api.getHistory(user.email, user.id).then(setHistory)
-    api.getFavorites(user.id).then(setFavorites)
-  }, [user.email, user.id])
+    if (!user?.id) return
+    let aborted = false
+
+    async function loadHistory() {
+      // 1. Try unified reservations endpoint (all statuses)
+      let reservationsData: any[] = []
+      try {
+        const res = await fetch(
+          `${BASE}/reservations?userId=${encodeURIComponent(user.id)}`,
+          { headers: { Accept: "application/json" } }
+        )
+        if (res.ok) {
+          const json = await res.json()
+          if (Array.isArray(json)) reservationsData = json
+        } else {
+          console.warn("[history] reservations fetch non-OK:", res.status)
+        }
+      } catch (e) {
+        console.warn("[history] reservations fetch failed:", e)
+      }
+
+      // 2. Fallback to legacy session probing if reservations empty
+      if (!reservationsData.length) {
+        try {
+          const legacy = await api.getHistory(user.email, user.id)
+          if (legacy.length) {
+            if (!aborted) setHistory(legacy)
+            return
+          }
+        } catch (e) {
+          console.warn("[history] legacy session fallback failed:", e)
+        }
+      }
+
+      // 3. Map reservations to history session model
+      const mapped = reservationsData.map(r => {
+        const stationObj = typeof r.stationId === "object" ? r.stationId : null
+        const start = r.startTime ? new Date(r.startTime) : null
+        const end = r.endTime ? new Date(r.endTime) : null
+        const durationMin =
+          start && end ? Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000)) : r.duration || 0
+
+        return {
+          id: r._id || r.id,
+          stationId:
+            stationObj?.stationName ||
+            stationObj?.name ||
+            stationObj?._id ||
+            r.stationName ||
+            r.stationId ||
+            "Unknown Station",
+          chargerId: r.connectorId || r.chargerId || "",
+            startTime: r.startTime,
+            endTime: r.endTime,
+          expiresAt: r.expiresAt || r.endTime || r.startTime,
+          status: r.status || "Completed",
+          paymentMethod: r.paymentMethod || r.billingMethod || "N/A",
+          cost: typeof r.cost === "number" ? r.cost : r.reservationFee || 0,
+          duration: durationMin,
+          energyDelivered: r.energyDelivered || r.energy || r.kwh || 0,
+          date: (r.startTime || r.createdAt || new Date()).toString(),
+        }
+      })
+
+      // 4. Sort newest first
+      mapped.sort(
+        (a, b) =>
+          new Date(b.startTime || b.date).getTime() - new Date(a.startTime || a.date).getTime()
+      )
+
+      if (!aborted) setHistory(mapped)
+    }
+
+    // Always refresh favorites too (unchanged behavior)
+    api.getFavorites(user.id).then(setFavorites).catch(() => {})
+
+    loadHistory()
+    return () => {
+      aborted = true
+    }
+  }, [user.id, user.email]) // <- updated dependency list
 
   const totalSessions = history.length
   const totalCost = history.reduce((sum, session) => sum + (session.cost || 0), 0)
   const totalEnergy = history.reduce((sum, session) => sum + (session.energyDelivered || 0), 0)
   const avgRating = 4.7 // Mock average rating
+
+  // FIX: unified safe address formatter (idempotent)
+  function formatAddress(addr: any): string {
+    if (!addr) return "Address not available"
+    if (typeof addr === "string") return addr
+    const { street, city } = addr || {}
+    return [street, city].filter(Boolean).join(", ") || "Address not available"
+  }
 
   async function handleReclamationSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -338,19 +427,28 @@ export default function DriverDashboard({
       return
     }
     try {
-     // Build minimal diff payload
-     const base = {
-       fullName: editableProfile.fullName,
-       vehicleDetails: editableProfile.vehicleDetails,
-       preferences: editableProfile.preferences,
-     } as any
-     if (editableProfile.email && editableProfile.email !== user.email) base.email = editableProfile.email
-     if (editableProfile.photoUrl && editableProfile.photoUrl !== user.photoUrl) base.photoUrl = editableProfile.photoUrl
+      // guarantee vehicleDetails.id before sending
+      const vehicleDetails = {
+        ...editableProfile.vehicleDetails,
+        id:
+          editableProfile.vehicleDetails.id ||
+          (editableProfile.vehicleDetails as any)._id ||
+          ((typeof crypto !== "undefined" && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : "veh_" + Math.random().toString(36).slice(2, 10)),
+      }
+      const base: any = {
+        fullName: editableProfile.fullName,
+        vehicleDetails,
+        preferences: editableProfile.preferences,
+      }
+      if (editableProfile.email && editableProfile.email !== user.email) base.email = editableProfile.email
+      if (editableProfile.photoUrl && editableProfile.photoUrl !== user.photoUrl) base.photoUrl = editableProfile.photoUrl
 
-     await api.updateProfile(user.id, base)
+      await api.updateProfile(user.id, base)
       setEditingProfile(false)
       try {
-       const merged = { ...user, ...base }
+        const merged = { ...user, ...base }
         localStorage.setItem("driverUser", JSON.stringify(merged))
       } catch {}
     } catch (err) {
@@ -401,11 +499,20 @@ export default function DriverDashboard({
     }
   }
 
+  const onCancel = async (id: string) => {
+    setCancelingId(id)
+    try {
+      await handleCancelReservation(id)
+    } finally {
+      setCancelingId(null)
+    }
+  }
+
   return (
     <div className="h-full bg-gray-50 overflow-y-auto">
       <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
         <div className="bg-white border-b border-gray-200 px-6 py-4">
-          <TabsList className="grid w-full grid-cols-6 bg-gray-100">
+          <TabsList className="grid w-full grid-cols-7 bg-gray-100">
             <TabsTrigger value="overview" className="flex items-center gap-2">
               <TrendingUp className="w-4 h-4" />
               Overview
@@ -413,6 +520,10 @@ export default function DriverDashboard({
             <TabsTrigger value="profile" className="flex items-center gap-2">
               <User className="w-4 h-4" />
               Profile
+            </TabsTrigger>
+            <TabsTrigger value="reservations" className="flex items-center gap-2">
+              <Calendar className="w-4 h-4" />
+              Reservations
             </TabsTrigger>
             <TabsTrigger value="history" className="flex items-center gap-2">
               <Clock className="w-4 h-4" />
@@ -856,6 +967,261 @@ export default function DriverDashboard({
                 )}
               </motion.div>
             )}
+            {activeView === "reservations" && (
+              <motion.div
+                key="reservations"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-4"
+              >
+                <div className="flex items-center gap-2 mb-4">
+                  <Calendar className="w-5 h-5 text-blue-600" />
+                  <h3 className="font-semibold text-gray-800">Your Reservations</h3>
+                </div>
+                {reservations.length === 0 ? (
+                  <Card className="bg-gray-50 text-center">
+                    <CardContent className="p-8">
+                      <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                      <p className="text-gray-600">No active reservations.</p>
+                      <p className="text-sm text-gray-500 mt-2">Find a station to get started.</p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div className="space-y-4">
+                    {reservations.map((res: any) => {
+                      const station = typeof res.stationId === "object" ? res.stationId : {}
+                      const rid = res._id || res.id
+                      return (
+                        <Card
+                          key={rid}
+                          className="bg-white shadow-md hover:shadow-lg transition-shadow overflow-hidden"
+                        >
+                          <CardHeader className="flex flex-row items-start justify-between p-4 bg-gray-50 border-b">
+                            <div>
+                              <CardTitle className="text-lg font-bold text-gray-800">
+                                {station?.stationName || "Station Details Unavailable"}
+                              </CardTitle>
+                              <p className="text-sm text-gray-500 flex items-center gap-1 mt-1">
+                                <MapPin className="w-4 h-4" />
+                                {formatAddress(station?.address)}
+                              </p>
+                            </div>
+                            <Badge variant={res.status === "Confirmed" ? "default" : "secondary"}>
+                              {res.status}
+                            </Badge>
+                          </CardHeader>
+                          <CardContent className="p-4 space-y-3">
+                            <div className="grid grid-cols-2 gap-4 text-sm">
+                              <div>
+                                <p className="font-semibold text-gray-500">Start Time</p>
+                                <p className="text-gray-800">
+                                  {res.startTime ? new Date(res.startTime).toLocaleString() : "—"}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-gray-500">End Time</p>
+                                <p className="text-gray-800">
+                                  {res.endTime ? new Date(res.endTime).toLocaleString() : "—"}
+                                </p>
+                              </div>
+                            </div>
+                            <div>
+                              <p className="font-semibold text-gray-500">Charger ID</p>
+                              <p className="text-gray-800 font-mono text-xs">{res.connectorId || "—"}</p>
+                            </div>
+                            <div className="flex items-center gap-2 pt-3 border-t">
+                              <Button variant="outline" size="sm" className="w-full" disabled>
+                                Modify Time
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                className="w-full"
+                                disabled={cancelingId === rid || res.status === "Cancelled"}
+                                onClick={() => onCancel(rid)}
+                              >
+                                {cancelingId === rid
+                                  ? "Canceling..."
+                                  : res.status === "Cancelled"
+                                  ? "Cancelled"
+                                  : "Cancel Reservation"}
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )
+                    })}
+                  </div>
+                )}
+              </motion.div>
+            )}
+            {activeView === "history" && (
+              <motion.div
+                key="history"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-4"
+              >
+                <div className="flex items-center gap-2 mb-4">
+                  <Clock className="w-5 h-5 text-emerald-600" />
+                  <h3 className="font-semibold text-gray-800">Charging History</h3>
+                </div>
+                {history.length === 0 ? (
+                  <Card className="bg-gray-50">
+                    <CardContent className="p-8 text-center">
+                      <Clock className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                      <p className="text-gray-600">No charging history yet</p>
+                      <p className="text-sm text-gray-500 mt-2">Your charging sessions will appear here</p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div className="space-y-3">
+                    {history.map((session) => (
+                      <Card key={session.id}>
+                        <CardContent className="p-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="font-medium text-gray-800">{session.stationId}</div>
+                              <div className="text-sm text-gray-600">{session.expiresAt}</div>
+                            </div>
+                            <Badge variant="secondary">{session.paymentMethod}</Badge>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </motion.div>
+            )}
+            {activeView === "favorites" && (
+              <motion.div
+                key="favorites"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-4"
+              >
+                <div className="flex items-center gap-2 mb-4">
+                  <Heart className="w-5 h-5 text-red-500" />
+                  <h3 className="font-semibold text-gray-800">Favorite Stations</h3>
+                </div>
+                {favorites.length === 0 ? (
+                  <Card className="bg-gray-50">
+                    <CardContent className="p-8 text-center">
+                      <Heart className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                      <p className="text-gray-600">No favorite stations yet</p>
+                      <p className="text-sm text-gray-500 mt-2">Tap the heart icon on stations to save them here</p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div className="text-gray-600">
+                    {favorites.map((stationId) => (
+                      <div key={stationId} className="py-1">
+                        {stationId}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </motion.div>
+            )}
+            {activeView === "support" && (
+              <motion.div
+                key="support"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-4"
+              >
+                <div className="flex items-center gap-2 mb-4">
+                  <AlertTriangle className="w-5 h-5 text-orange-500" />
+                  <h3 className="font-semibold text-gray-800">Report an Issue</h3>
+                </div>
+                <Card>
+                  <CardContent className="p-4">
+                    <form onSubmit={handleReclamationSubmit} className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="station-select">Station</Label>
+                        <Select
+                          value={reclamationForm.stationId}
+                          onValueChange={(value) => setReclamationForm({ ...reclamationForm, stationId: value })}
+                        >
+                          <SelectTrigger id="station-select">
+                            <SelectValue placeholder="Select a station to report" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {history.map((session) => (
+                              <SelectItem key={session.id} value={session.stationId}>
+                                {session.stationId}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="issue-title">Title</Label>
+                          <Input
+                            id="issue-title"
+                            value={reclamationForm.title}
+                            onChange={(e) => setReclamationForm({ ...reclamationForm, title: e.target.value })}
+                            placeholder="e.g., Charger not working"
+                            required
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="issue-category">Category</Label>
+                          <Select
+                            value={reclamationForm.category}
+                            onValueChange={(value) => setReclamationForm({ ...reclamationForm, category: value })}
+                          >
+                            <SelectTrigger id="issue-category">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="Incorrect Station Info">Incorrect Info</SelectItem>
+                              <SelectItem value="Broken Charger">Broken Charger</SelectItem>
+                              <SelectItem value="Billing Issue">Billing Issue</SelectItem>
+                              <SelectItem value="General Feedback">General Feedback</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="issue-description">Describe the issue</Label>
+                        <textarea
+                          id="issue-description"
+                          value={reclamationForm.description}
+                          onChange={(e) => setReclamationForm({ ...reclamationForm, description: e.target.value })}
+                          className="w-full p-3 border border-gray-200 rounded-lg focus:border-emerald-500 focus:ring-emerald-500 resize-none"
+                          rows={4}
+                          placeholder="Please provide details about the issue..."
+                          required
+                        />
+                      </div>
+
+                      <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700">
+                        Submit Report
+                      </Button>
+                    </form>
+
+                    {reclamations.length > 0 && (
+                      <div className="mt-4 space-y-2">
+                        <h4 className="font-semibold text-gray-700">Submitted Issues</h4>
+                        {reclamations.map((rec, idx) => (
+                          <div key={idx} className="text-sm text-gray-600 border-b py-1">
+                            {rec.description} <span className="text-xs text-gray-400">({rec.status})</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
             {activeView === "settings" && (
               <motion.div
                 key="settings"
@@ -1031,172 +1397,6 @@ export default function DriverDashboard({
                     {savingSettings ? "Saving..." : "Save Settings"}
                   </Button>
                 </div>
-              </motion.div>
-            )}
-            {activeView === "history" && (
-              <motion.div
-                key="history"
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -16 }}
-                className="space-y-4"
-              >
-                <div className="flex items-center gap-2 mb-4">
-                  <Clock className="w-5 h-5 text-emerald-600" />
-                  <h3 className="font-semibold text-gray-800">Charging History</h3>
-                </div>
-                {history.length === 0 ? (
-                  <Card className="bg-gray-50">
-                    <CardContent className="p-8 text-center">
-                      <Clock className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                      <p className="text-gray-600">No charging history yet</p>
-                      <p className="text-sm text-gray-500 mt-2">Your charging sessions will appear here</p>
-                    </CardContent>
-                  </Card>
-                ) : (
-                  <div className="space-y-3">
-                    {history.map((session) => (
-                      <Card key={session.id}>
-                        <CardContent className="p-4">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <div className="font-medium text-gray-800">{session.stationId}</div>
-                              <div className="text-sm text-gray-600">{session.expiresAt}</div>
-                            </div>
-                            <Badge variant="secondary">{session.paymentMethod}</Badge>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                )}
-              </motion.div>
-            )}
-            {activeView === "favorites" && (
-              <motion.div
-                key="favorites"
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -16 }}
-                className="space-y-4"
-              >
-                <div className="flex items-center gap-2 mb-4">
-                  <Heart className="w-5 h-5 text-red-500" />
-                  <h3 className="font-semibold text-gray-800">Favorite Stations</h3>
-                </div>
-                {favorites.length === 0 ? (
-                  <Card className="bg-gray-50">
-                    <CardContent className="p-8 text-center">
-                      <Heart className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                      <p className="text-gray-600">No favorite stations yet</p>
-                      <p className="text-sm text-gray-500 mt-2">Tap the heart icon on stations to save them here</p>
-                    </CardContent>
-                  </Card>
-                ) : (
-                  <div className="text-gray-600">
-                    {favorites.map((stationId) => (
-                      <div key={stationId} className="py-1">
-                        {stationId}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </motion.div>
-            )}
-            {activeView === "support" && (
-              <motion.div
-                key="support"
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -16 }}
-                className="space-y-4"
-              >
-                <div className="flex items-center gap-2 mb-4">
-                  <AlertTriangle className="w-5 h-5 text-orange-500" />
-                  <h3 className="font-semibold text-gray-800">Report an Issue</h3>
-                </div>
-                <Card>
-                  <CardContent className="p-4">
-                    <form onSubmit={handleReclamationSubmit} className="space-y-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="station-select">Station</Label>
-                        <Select
-                          value={reclamationForm.stationId}
-                          onValueChange={(value) => setReclamationForm({ ...reclamationForm, stationId: value })}
-                        >
-                          <SelectTrigger id="station-select">
-                            <SelectValue placeholder="Select a station to report" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {history.map((session) => (
-                              <SelectItem key={session.id} value={session.stationId}>
-                                {session.stationId}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="issue-title">Title</Label>
-                          <Input
-                            id="issue-title"
-                            value={reclamationForm.title}
-                            onChange={(e) => setReclamationForm({ ...reclamationForm, title: e.target.value })}
-                            placeholder="e.g., Charger not working"
-                            required
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="issue-category">Category</Label>
-                          <Select
-                            value={reclamationForm.category}
-                            onValueChange={(value) => setReclamationForm({ ...reclamationForm, category: value })}
-                          >
-                            <SelectTrigger id="issue-category">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="Incorrect Station Info">Incorrect Info</SelectItem>
-                              <SelectItem value="Broken Charger">Broken Charger</SelectItem>
-                              <SelectItem value="Billing Issue">Billing Issue</SelectItem>
-                              <SelectItem value="General Feedback">General Feedback</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="issue-description">Describe the issue</Label>
-                        <textarea
-                          id="issue-description"
-                          value={reclamationForm.description}
-                          onChange={(e) => setReclamationForm({ ...reclamationForm, description: e.target.value })}
-                          className="w-full p-3 border border-gray-200 rounded-lg focus:border-emerald-500 focus:ring-emerald-500 resize-none"
-                          rows={4}
-                          placeholder="Please provide details about the issue..."
-                          required
-                        />
-                      </div>
-
-                      <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700">
-                        Submit Report
-                      </Button>
-                    </form>
-
-                    {reclamations.length > 0 && (
-                      <div className="mt-4 space-y-2">
-                        <h4 className="font-semibold text-gray-700">Submitted Issues</h4>
-                        {reclamations.map((rec, idx) => (
-                          <div key={idx} className="text-sm text-gray-600 border-b py-1">
-                            {rec.description} <span className="text-xs text-gray-400">({rec.status})</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
               </motion.div>
             )}
           </AnimatePresence>

@@ -1,12 +1,12 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { StationList } from "./_components/StationList"
 import { AddStationModal } from "./_components/AddStationModal"
 import { EditStationModal } from "./_components/EditStationModal"
 import { ActiveSessionsList } from "./_components/ActiveSessionsList"
 import { ReviewList } from "./_components/ReviewList"
-import type { Station } from "./types"
+import type { Station, Reservation } from "./types"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -24,6 +24,7 @@ import {
   Star,
   TrendingUp,
   LogOut,
+  RefreshCcw,
 } from "lucide-react"
 import Spotlight from "@/components/creative/spotlight"
 import TiltCard from "@/components/creative/tilt-card"
@@ -44,6 +45,8 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5000").replace(/\/$/, "")
+
 export default function OwnerDashboard() {
   const [stations, setStations] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -51,16 +54,18 @@ export default function OwnerDashboard() {
   const [editingStation, setEditingStation] = useState<Station | null>(null)
   const [showAddModal, setShowAddModal] = useState(false)
   const [todaySessions, setTodaySessions] = useState(0)
-  const [reservations, setReservations] = useState([])
-  const [reclamations, setReclamations] = useState([])
-  const [activeSessions, setActiveSessions] = useState([])
-  const [reviews, setReviews] = useState([])
+  const [reservations, setReservations] = useState<Reservation[]>([])
+  const [loadingReservations, setLoadingReservations] = useState(false)
+  const [reclamations, setReclamations] = useState<any[]>([])
+  const [activeSessions, setActiveSessions] = useState<any[]>([])
+  const [reviews, setReviews] = useState<any[]>([])
   const [activeView, setActiveView] = useState("overview")
+  const reservationsIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const router = useRouter()
 
   const totalConnectors = stations.reduce((acc, s) => acc + (s.connectors?.length || 0), 0)
   const activeConnectors = stations.reduce(
-    (acc, s) => acc + (s.connectors?.filter((c) => c.status === "available").length || 0),
+    (acc, s) => acc + (s.connectors?.filter((c: any) => c.status === "available").length || 0),
     0,
   )
   const averageRating =
@@ -76,14 +81,10 @@ export default function OwnerDashboard() {
       setError(null)
       const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null
       if (!ownerId) throw new Error("Owner not logged in.")
-      const res = await fetch(
-        `${(process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5000").replace(/\/$/, "")}/stations?ownerId=${encodeURIComponent(
-          ownerId,
-        )}`,
-      )
+      const res = await fetch(`${API_BASE}/stations?ownerId=${encodeURIComponent(ownerId)}`)
       if (!res.ok) throw new Error("Failed to fetch stations.")
       const data = await res.json()
-      setStations(data)
+      setStations(Array.isArray(data) ? data : [])
     } catch (e: any) {
       setError(e.message || "Failed to load stations.")
       setStations([])
@@ -92,9 +93,53 @@ export default function OwnerDashboard() {
     }
   }
 
+  const fetchReservations = async () => {
+    try {
+      const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null
+      if (!ownerId) return
+      const ids = stations.map((s) => s._id).filter(Boolean)
+      if (!ids.length) {
+        setReservations([])
+        return
+      }
+      setLoadingReservations(true)
+      const res = await fetch(`${API_BASE}/reservations?stationId_in=${ids.join(",")}`)
+      if (!res.ok) {
+        setReservations([])
+        return
+      }
+      const data = await res.json()
+      setReservations(Array.isArray(data) ? data : [])
+    } catch {
+      setReservations([])
+    } finally {
+      setLoadingReservations(false)
+    }
+  }
+
   useEffect(() => {
     fetchStations()
   }, [])
+
+  // Fetch reservations whenever stations change
+  useEffect(() => {
+    if (stations.length) fetchReservations()
+    else setReservations([])
+  }, [stations])
+
+  // Poll reservations only while reservations view is active
+  useEffect(() => {
+    if (activeView === "reservations") {
+      fetchReservations()
+      reservationsIntervalRef.current = setInterval(fetchReservations, 30000)
+    } else if (reservationsIntervalRef.current) {
+      clearInterval(reservationsIntervalRef.current)
+      reservationsIntervalRef.current = null
+    }
+    return () => {
+      if (reservationsIntervalRef.current) clearInterval(reservationsIntervalRef.current)
+    }
+  }, [activeView])
 
   useEffect(() => {
     const fetchTodaySessions = async () => {
@@ -102,13 +147,12 @@ export default function OwnerDashboard() {
       today.setHours(0, 0, 0, 0)
       const tomorrow = new Date(today)
       tomorrow.setDate(today.getDate() + 1)
-
       const response = await fetch(
-        `http://localhost:5000/charging-sessions?startTime_gte=${today.toISOString()}&startTime_lt=${tomorrow.toISOString()}`,
+        `${API_BASE}/charging-sessions?startTime_gte=${today.toISOString()}&startTime_lt=${tomorrow.toISOString()}`,
       )
       if (response.ok) {
         const data = await response.json()
-        setTodaySessions(data.length)
+        setTodaySessions(Array.isArray(data) ? data.length : 0)
       } else {
         setTodaySessions(0)
       }
@@ -117,26 +161,12 @@ export default function OwnerDashboard() {
   }, [])
 
   useEffect(() => {
-    const fetchReservations = async () => {
-      const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null
-      const response = await fetch(`http://localhost:5000/reservations?ownerId=${ownerId}`)
-      if (response.ok) {
-        const data = await response.json()
-        setReservations(data)
-      } else {
-        setReservations([])
-      }
-    }
-    fetchReservations()
-  }, [])
-
-  useEffect(() => {
     const fetchReclamations = async () => {
       const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null
-      const response = await fetch(`http://localhost:5000/reclamations?ownerId=${ownerId}`)
+      const response = await fetch(`${API_BASE}/reclamations?ownerId=${ownerId}`)
       if (response.ok) {
         const data = await response.json()
-        setReclamations(data)
+        setReclamations(Array.isArray(data) ? data : [])
       } else {
         setReclamations([])
       }
@@ -147,16 +177,15 @@ export default function OwnerDashboard() {
   useEffect(() => {
     const fetchActiveSessions = async () => {
       const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null
-      const response = await fetch(`http://localhost:5000/charging-sessions?ownerId=${ownerId}&status=active`)
+      const response = await fetch(`${API_BASE}/charging-sessions?ownerId=${ownerId}&status=active`)
       if (response.ok) {
         const data = await response.json()
-        setActiveSessions(data)
+        setActiveSessions(Array.isArray(data) ? data : [])
       } else {
         setActiveSessions([])
       }
     }
     fetchActiveSessions()
-
     const interval = setInterval(fetchActiveSessions, 30000)
     return () => clearInterval(interval)
   }, [])
@@ -164,10 +193,10 @@ export default function OwnerDashboard() {
   useEffect(() => {
     const fetchReviews = async () => {
       const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null
-      const response = await fetch(`http://localhost:5000/reviews?ownerId=${ownerId}`)
+      const response = await fetch(`${API_BASE}/reviews?ownerId=${ownerId}`)
       if (response.ok) {
         const data = await response.json()
-        setReviews(data)
+        setReviews(Array.isArray(data) ? data : [])
       } else {
         setReviews([])
       }
@@ -176,20 +205,11 @@ export default function OwnerDashboard() {
   }, [])
 
   const handleEdit = (station: Station | null) => {
-    if (station) {
-      setEditingStation(station)
-    } else {
-      setShowAddModal(true)
-    }
+    if (station) setEditingStation(station)
+    else setShowAddModal(true)
   }
-
-  const handleCloseEdit = () => {
-    setEditingStation(null)
-  }
-
-  const handleCloseAdd = () => {
-    setShowAddModal(false)
-  }
+  const handleCloseEdit = () => setEditingStation(null)
+  const handleCloseAdd = () => setShowAddModal(false)
 
   const handleLogout = () => {
     if (typeof window !== "undefined") {
@@ -199,54 +219,14 @@ export default function OwnerDashboard() {
   }
 
   const sidebarItems = [
-    {
-      id: "overview",
-      label: "Overview",
-      icon: TrendingUp,
-      badge: null,
-    },
-    {
-      id: "stations",
-      label: "Stations",
-      icon: MapPin,
-      badge: stations.length,
-    },
-    {
-      id: "active-sessions",
-      label: "Active Sessions",
-      icon: Clock,
-      badge: activeSessions.length,
-    },
-    {
-      id: "reservations",
-      label: "Reservations",
-      icon: Calendar,
-      badge: reservations.length,
-    },
-    {
-      id: "reviews",
-      label: "Reviews",
-      icon: Star,
-      badge: pendingReviews > 0 ? pendingReviews : null,
-    },
-    {
-      id: "reclamations",
-      label: "Issues",
-      icon: AlertTriangle,
-      badge: pendingReclamations > 0 ? pendingReclamations : null,
-    },
-    {
-      id: "connectors",
-      label: "Hardware",
-      icon: Activity,
-      badge: null,
-    },
-    {
-      id: "analytics",
-      label: "Analytics",
-      icon: BarChart3,
-      badge: null,
-    },
+    { id: "overview", label: "Overview", icon: TrendingUp, badge: null },
+    { id: "stations", label: "Stations", icon: MapPin, badge: stations.length },
+    { id: "active-sessions", label: "Active Sessions", icon: Clock, badge: activeSessions.length },
+    { id: "reservations", label: "Reservations", icon: Calendar, badge: reservations.length },
+    { id: "reviews", label: "Reviews", icon: Star, badge: pendingReviews > 0 ? pendingReviews : null },
+    { id: "reclamations", label: "Issues", icon: AlertTriangle, badge: pendingReclamations > 0 ? pendingReclamations : null },
+    { id: "connectors", label: "Hardware", icon: Activity, badge: null },
+    { id: "analytics", label: "Analytics", icon: BarChart3, badge: null },
   ]
 
   if (isLoading) {
@@ -257,7 +237,6 @@ export default function OwnerDashboard() {
           <div className="absolute top-40 -right-16 h-[26rem] w-[26rem] rounded-full bg-emerald-200 blur-3xl opacity-70" />
           <div className="absolute -bottom-24 left-1/2 -translate-x-1/2 h-[28rem] w-[28rem] rounded-full bg-amber-100 blur-3xl opacity-70" />
         </div>
-
         <Spotlight className="relative">
           <div className="container mx-auto px-4 py-8 lg:py-12">
             <TiltCard className="bg-white/95 backdrop-blur-sm border border-gray-100 shadow-2xl max-w-md mx-auto">
@@ -290,7 +269,6 @@ export default function OwnerDashboard() {
           <div className="absolute top-40 -right-16 h-[26rem] w-[26rem] rounded-full bg-orange-200 blur-3xl opacity-70" />
           <div className="absolute -bottom-24 left-1/2 -translate-x-1/2 h-[28rem] w-[28rem] rounded-full bg-yellow-100 blur-3xl opacity-70" />
         </div>
-
         <Spotlight className="relative">
           <div className="container mx-auto px-4 py-8 lg:py-12">
             <TiltCard className="bg-white/95 backdrop-blur-sm border border-red-100 shadow-2xl max-w-md mx-auto">
@@ -320,42 +298,10 @@ export default function OwnerDashboard() {
           <div className="space-y-8">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {[
-                {
-                  icon: MapPin,
-                  title: "Total Stations",
-                  value: stations.length,
-                  subtitle: `${totalConnectors} connectors`,
-                  color: "text-emerald-600",
-                  bg: "bg-emerald-100",
-                  trend: "+12%",
-                },
-                {
-                  icon: Activity,
-                  title: "Active Now",
-                  value: activeSessions.length,
-                  subtitle: `${activeConnectors} available`,
-                  color: "text-blue-600",
-                  bg: "bg-blue-100",
-                  trend: "+8%",
-                },
-                {
-                  icon: Users,
-                  title: "Today's Sessions",
-                  value: todaySessions,
-                  subtitle: "charging sessions",
-                  color: "text-purple-600",
-                  bg: "bg-purple-100",
-                  trend: "+15%",
-                },
-                {
-                  icon: Star,
-                  title: "Average Rating",
-                  value: averageRating,
-                  subtitle: `${reviews.length} reviews`,
-                  color: "text-yellow-600",
-                  bg: "bg-yellow-100",
-                  trend: "+0.2",
-                },
+                { icon: MapPin, title: "Total Stations", value: stations.length, subtitle: `${totalConnectors} connectors`, color: "text-emerald-600", bg: "bg-emerald-100", trend: "+12%" },
+                { icon: Activity, title: "Active Now", value: activeSessions.length, subtitle: `${activeConnectors} available`, color: "text-blue-600", bg: "bg-blue-100", trend: "+8%" },
+                { icon: Users, title: "Today's Sessions", value: todaySessions, subtitle: "charging sessions", color: "text-purple-600", bg: "bg-purple-100", trend: "+15%" },
+                { icon: Star, title: "Average Rating", value: averageRating, subtitle: `${reviews.length} reviews`, color: "text-yellow-600", bg: "bg-yellow-100", trend: "+0.2" },
               ].map((stat, i) => (
                 <TiltCard
                   key={i}
@@ -382,13 +328,12 @@ export default function OwnerDashboard() {
                 </TiltCard>
               ))}
             </div>
-
             {(pendingReclamations > 0 || pendingReviews > 0) && (
               <TiltCard className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 shadow-lg">
                 <Card className="border-none shadow-none">
                   <CardContent className="p-6">
                     <div className="flex items-center gap-3">
-                      <AlertTriangle className="h-5 w-5 text-yellow-600" />
+                      <AlertTriangle className="h-5 h- w-5 text-yellow-600" />
                       <div className="flex-1">
                         <h3 className="font-semibold text-yellow-800">Action Required</h3>
                         <p className="text-sm text-yellow-700">
@@ -406,7 +351,6 @@ export default function OwnerDashboard() {
             )}
           </div>
         )
-
       case "stations":
         return (
           <div className="space-y-6">
@@ -426,7 +370,6 @@ export default function OwnerDashboard() {
             <StationList stations={stations} onEdit={handleEdit} onDataChange={fetchStations} />
           </div>
         )
-
       case "active-sessions":
         return (
           <div className="space-y-6">
@@ -446,12 +389,10 @@ export default function OwnerDashboard() {
               onDataChange={() => {
                 const fetchActiveSessions = async () => {
                   const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null
-                  const response = await fetch(
-                    `http://localhost:5000/charging-sessions?ownerId=${ownerId}&status=active`,
-                  )
+                  const response = await fetch(`${API_BASE}/charging-sessions?ownerId=${ownerId}&status=active`)
                   if (response.ok) {
                     const data = await response.json()
-                    setActiveSessions(data)
+                    setActiveSessions(Array.isArray(data) ? data : [])
                   }
                 }
                 fetchActiveSessions()
@@ -459,19 +400,32 @@ export default function OwnerDashboard() {
             />
           </div>
         )
-
       case "reservations":
         return (
           <div className="space-y-6">
-            <div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">Reservations</h2>
-              <p className="text-gray-600">Manage customer bookings and schedules</p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">Reservations</h2>
+                <p className="text-gray-600">Manage customer bookings and schedules</p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={fetchReservations}
+                disabled={loadingReservations}
+                className="flex items-center gap-2 bg-transparent"
+              >
+                <RefreshCcw className={`h-4 w-4 ${loadingReservations ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
             </div>
             <Separator />
-            <ReservationList reservations={reservations} />
+            {loadingReservations && reservations.length === 0 ? (
+              <div className="text-sm text-gray-500">Loading reservations...</div>
+            ) : (
+              <ReservationList reservations={reservations} />
+            )}
           </div>
         )
-
       case "reviews":
         return (
           <div className="space-y-6">
@@ -497,10 +451,10 @@ export default function OwnerDashboard() {
               onDataChange={() => {
                 const fetchReviews = async () => {
                   const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null
-                  const response = await fetch(`http://localhost:5000/reviews?ownerId=${ownerId}`)
+                  const response = await fetch(`${API_BASE}/reviews?ownerId=${ownerId}`)
                   if (response.ok) {
                     const data = await response.json()
-                    setReviews(data)
+                    setReviews(Array.isArray(data) ? data : [])
                   }
                 }
                 fetchReviews()
@@ -508,7 +462,6 @@ export default function OwnerDashboard() {
             />
           </div>
         )
-
       case "reclamations":
         return (
           <div className="space-y-6">
@@ -528,10 +481,10 @@ export default function OwnerDashboard() {
               onDataChange={() => {
                 const fetchReclamations = async () => {
                   const ownerId = typeof window !== "undefined" ? localStorage.getItem("ownerId") : null
-                  const response = await fetch(`http://localhost:5000/reclamations?ownerId=${ownerId}`)
+                  const response = await fetch(`${API_BASE}/reclamations?ownerId=${ownerId}`)
                   if (response.ok) {
                     const data = await response.json()
-                    setReclamations(data)
+                    setReclamations(Array.isArray(data) ? data : [])
                   }
                 }
                 fetchReclamations()
@@ -539,7 +492,6 @@ export default function OwnerDashboard() {
             />
           </div>
         )
-
       case "connectors":
         return (
           <div className="space-y-6">
@@ -556,11 +508,11 @@ export default function OwnerDashboard() {
               </div>
             ) : (
               <div className="space-y-8">
-                {stations.map((station) => (
+                {stations.map((station: any) => (
                   <div key={station._id}>
                     <h3 className="text-lg font-bold text-gray-900 mb-4">{station.stationName}</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {station.connectors.map((connector, idx) => (
+                      {station.connectors.map((connector: any, idx: number) => (
                         <ConnectorEditor
                           key={connector._id || idx}
                           connector={connector}
@@ -575,7 +527,6 @@ export default function OwnerDashboard() {
             )}
           </div>
         )
-
       case "analytics":
         return (
           <div className="text-center py-16">
@@ -593,7 +544,6 @@ export default function OwnerDashboard() {
             </Badge>
           </div>
         )
-
       default:
         return null
     }
@@ -614,7 +564,6 @@ export default function OwnerDashboard() {
               </div>
             </div>
           </SidebarHeader>
-
           <SidebarContent className="p-4">
             <div className="mb-6">
               <div className="bg-gradient-to-br from-emerald-50 to-lime-50 rounded-xl p-4 border border-emerald-100">
@@ -639,7 +588,6 @@ export default function OwnerDashboard() {
                 </div>
               </div>
             </div>
-
             <SidebarMenu>
               {sidebarItems.map((item) => (
                 <SidebarMenuItem key={item.id}>
@@ -660,7 +608,6 @@ export default function OwnerDashboard() {
               ))}
             </SidebarMenu>
           </SidebarContent>
-
           <SidebarFooter className="border-t border-gray-200 p-4">
             <Button
               onClick={handleLogout}
@@ -672,7 +619,6 @@ export default function OwnerDashboard() {
             </Button>
           </SidebarFooter>
         </Sidebar>
-
         <SidebarInset className="flex-1">
           <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-sm border-b border-gray-200 px-6 py-4">
             <div className="flex items-center gap-4">
@@ -685,21 +631,19 @@ export default function OwnerDashboard() {
               </div>
             </div>
           </div>
-
           <div className="p-6">
             <div className="absolute inset-0 -z-10 overflow-hidden">
               <div className="absolute -top-20 -left-16 h-80 w-80 rounded-full bg-lime-200 blur-3xl opacity-30" />
               <div className="absolute top-40 -right-16 h-[26rem] w-[26rem] rounded-full bg-emerald-200 blur-3xl opacity-30" />
               <div className="absolute -bottom-24 left-1/2 -translate-x-1/2 h-[28rem] w-[28rem] rounded-full bg-amber-100 blur-3xl opacity-30" />
             </div>
-
             <Spotlight className="relative">{renderContent()}</Spotlight>
           </div>
         </SidebarInset>
       </div>
-
-      {showAddModal && <AddStationModal open={showAddModal} setOpen={setShowAddModal} onStationAdded={fetchStations} />}
-
+      {showAddModal && (
+        <AddStationModal open={showAddModal} setOpen={setShowAddModal} onStationAdded={fetchStations} />
+      )}
       {editingStation && (
         <EditStationModal
           station={editingStation}

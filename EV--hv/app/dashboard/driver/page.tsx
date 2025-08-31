@@ -25,7 +25,7 @@ import {
   SidebarInset,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
-import type { CarOwner, Station } from "./types"
+import type { CarOwner, Station, Reservation } from "./types"
 
 /* ---------- GENERIC LOADING COMPONENT ---------- */
 const LoadingState = ({ message }: { message: string }) => (
@@ -69,6 +69,74 @@ const api = {
     if (!res.ok) throw new Error("Failed to update favorites")
     return res.json()
   },
+  // UPDATED: enrich each reservation with full station details if not already populated
+  getReservations: async (userId: string): Promise<Reservation[]> => {
+    if (!userId) return []
+    const url = `http://localhost:5000/reservations?userId=${encodeURIComponent(
+      userId
+    )}&status=Confirmed,Active` // station route already populates (if backend supports); keep populate param optional
+    try {
+      const res = await fetch(url)
+      if (!res.ok) {
+        console.warn("Failed to fetch reservations.")
+        return []
+      }
+      const raw = await res.json()
+      if (!Array.isArray(raw)) return []
+
+      // Enrich missing station objects
+      const cache = new Map<string, any>()
+      async function fetchStation(id: string) {
+        if (cache.has(id)) return cache.get(id)
+        try {
+          const rs = await fetch(`http://localhost:5000/stations/${id}`)
+          if (!rs.ok) throw new Error(String(rs.status))
+          const data = await rs.json()
+          cache.set(id, data)
+          return data
+        } catch {
+          return null
+        }
+      }
+
+      const enriched = await Promise.all(
+        raw.map(async (r: any) => {
+          if (r && r.stationId && typeof r.stationId === "object") {
+            return r
+          }
+            const sid = r.stationId?._id || r.stationId
+            if (!sid) return r
+            const station = await fetchStation(sid)
+            if (station) {
+              return {
+                ...r,
+                stationId: {
+                  _id: station._id || sid,
+                  stationName: station.stationName || station.name || "Unknown Station",
+                  address: station.address || "Address unavailable",
+                },
+              }
+            }
+            return r
+        })
+      )
+      return enriched
+    } catch (e) {
+      console.warn("Reservations enrichment failed:", e)
+      return []
+    }
+  },
+
+  // NEW: cancel reservation
+  cancelReservation: async (reservationId: string) => {
+    const res = await fetch(`http://localhost:5000/reservations/${reservationId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "Cancelled" }),
+    })
+    if (!res.ok) throw new Error("Failed to cancel reservation")
+    return res.json()
+  },
 }
 
 /* ---------- NORMALIZERS & CHECKS ---------- */
@@ -76,19 +144,26 @@ function normalizeUser(raw: any): CarOwner | null {
   if (!raw) return null
   const base = raw.user || raw
   const id = base.id || base._id
+  const veh = base.vehicleDetails || base.vehicle || {
+    make: "",
+    model: "",
+    primaryConnector: "",
+    adapters: [],
+  }
+  if (!veh.id && !veh._id) {
+    veh.id = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : "veh_" + Math.random().toString(36).slice(2, 10)
+  }
   return {
     id,
     _id: base._id || id,
     fullName: base.fullName || "",
     email: base.email || "",
-    vehicleDetails:
-      base.vehicleDetails ||
-      base.vehicle || {
-        make: "",
-        model: "",
-        primaryConnector: "",
-        adapters: [],
-      },
+    vehicleDetails: {
+      ...veh,
+      id: veh._id || veh.id,
+    },
     preferences: base.preferences || { preferredNetworks: [], requiredAmenities: [] },
   } as CarOwner
 }
@@ -105,19 +180,18 @@ function isProfileComplete(u: CarOwner) {
 
 /* ---------- COMPONENT ---------- */
 export default function DriverPage() {
+  // ---------- STATE HOOKS (unchanged) ----------
   const [user, setUser] = useState<CarOwner | null>(null)
   const [loadingUser, setLoadingUser] = useState(true)
-
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null)
   const [locationPending, setLocationPending] = useState(false)
   const [locationError, setLocationError] = useState<string | null>(null)
-
   const [favorites, setFavorites] = useState<string[]>([])
-
+  const [reservations, setReservations] = useState<Reservation[]>([])
+  const [reservationStatusFilter, setReservationStatusFilter] = useState<string>("all")
   const [selectedStation, setSelectedStation] = useState<Station | null>(null)
   const [reservationFlow, setReservationFlow] = useState<{ station: Station; chargerId: string } | null>(null)
   const [currentView, setCurrentView] = useState<DashboardView>("overview")
-
   const [notifications, setNotifications] = useState<any[]>([])
   const [showNotifications, setShowNotifications] = useState(false)
   const [loadingNotifications, setLoadingNotifications] = useState(false)
@@ -126,18 +200,18 @@ export default function DriverPage() {
 
   const GATEWAY_BASE = (process.env.NEXT_PUBLIC_GATEWAY_BASE || "http://localhost:3001").replace(/\/$/, "")
 
-  /* ---------- LOAD USER ---------- */
+  // ---------- EFFECTS (keep ALL hooks BEFORE any conditional return) ----------
   useEffect(() => {
     const run = async () => {
       try {
         const cached = localStorage.getItem("driverUser")
         if (cached) {
           const parsed = normalizeUser(JSON.parse(cached))
-            if (parsed) {
-              setUser(parsed)
-              setLoadingUser(false)
-              return
-            }
+          if (parsed) {
+            setUser(parsed)
+            setLoadingUser(false)
+            return
+          }
         }
         const id = localStorage.getItem("driverUserId")
         if (!id) {
@@ -164,26 +238,31 @@ export default function DriverPage() {
     run()
   }, [])
 
-  /* ---------- REDIRECT IF NO USER ---------- */
   useEffect(() => {
     if (!loadingUser && !user) {
       const hasId = localStorage.getItem("driverUserId")
-      if (!hasId) {
-        window.location.href = "/sign-in"
-      }
+      if (!hasId) window.location.href = "/sign-in"
     }
   }, [loadingUser, user])
 
-  /* ---------- FAVORITES ---------- */
+  // central fetcher (no hooks inside)
+  async function fetchReservationsAndFavorites(uid: string) {
+    try {
+      const favs = await api.getFavorites(uid).catch(() => [])
+      setFavorites(Array.isArray(favs) ? favs : [])
+      const resv = await api.getReservations(uid)
+      setReservations(resv)
+    } catch (e) {
+      console.warn("Data fetch error:", e)
+    }
+  }
+
   useEffect(() => {
-    if (!user?.id) return
-    api
-      .getFavorites(user.id)
-      .then((f) => setFavorites(Array.isArray(f) ? f : []))
-      .catch(() => setFavorites([]))
+    const uid = user?.id || (user as any)?._id
+    if (!uid) return
+    fetchReservationsAndFavorites(uid)
   }, [user?.id])
 
-  /* ---------- MOBILE DETECTION ---------- */
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768)
@@ -199,36 +278,31 @@ export default function DriverPage() {
     return () => window.removeEventListener("resize", checkMobile)
   }, [])
 
-  /* ---------- NOTIFICATIONS ---------- */
-  const fetchNotifications = useCallback(async () => {
+  async function fetchNotifications() {
     if (!user?.id) return
     try {
       setLoadingNotifications(true)
-      const res = await fetch(`${GATEWAY_BASE}/api/notifications?userId=${encodeURIComponent(user.id)}`, {
-        cache: "no-store",
-      })
-      if (res.ok) {
-        const data = await res.json()
-        setNotifications(data)
-      }
+      const res = await fetch(`${GATEWAY_BASE}/api/notifications?userId=${encodeURIComponent(user.id)}`, { cache: "no-store" })
+      if (res.ok) setNotifications(await res.json())
     } catch (e) {
       console.error("Notifications fetch failed:", e)
     } finally {
       setLoadingNotifications(false)
     }
-  }, [user?.id, GATEWAY_BASE])
+  }
 
   useEffect(() => {
     fetchNotifications()
     if (!user?.id) return
     const interval = setInterval(fetchNotifications, 60000)
     return () => clearInterval(interval)
-  }, [fetchNotifications, user?.id])
+  }, [user?.id])
 
+  // ---------- ACTION HELPERS (NO hooks below this line) ----------
   async function markNotificationRead(id: string) {
     try {
       await fetch(`${GATEWAY_BASE}/api/notifications/${id}/read`, { method: "PATCH" })
-      setNotifications((prev) => prev.map((n) => (n._id === id ? { ...n, read: true, isRead: true } : n)))
+      setNotifications(prev => prev.map(n => (n._id === id ? { ...n, read: true, isRead: true } : n)))
     } catch (e) {
       console.error("Mark read failed:", e)
     }
@@ -242,43 +316,63 @@ export default function DriverPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: user.id }),
       })
-      setNotifications((prev) => prev.map((n) => ({ ...n, read: true, isRead: true })))
+      setNotifications(prev => prev.map(n => ({ ...n, read: true, isRead: true })))
     } catch (e) {
       console.error("Mark all read failed:", e)
     }
   }
 
-  const unreadCount = notifications.filter((n) => !(n.read ?? n.isRead)).length
-
-  /* ---------- LOADING STATES ---------- */
-  if (loadingUser) {
-    return <LoadingState message="Loading your profile..." />
+  async function handleCancelReservation(reservationId: string) {
+    if (!reservationId) return
+    if (!confirm("Are you sure you want to cancel this reservation?")) return
+    try {
+      await api.cancelReservation(reservationId)
+      // Option 1: mutate locally
+      setReservations(prev =>
+        prev.map(r => {
+          const rid = (r as any)._id || (r as any).id
+          return rid === reservationId ? { ...r, status: "Cancelled" } : r
+        })
+      )
+      // Option 2 (strong consistency): re-fetch only reservations
+      const uid = user?.id || (user as any)?._id
+      if (uid) {
+        const updated = await api.getReservations(uid)
+        setReservations(updated)
+      }
+    } catch (e) {
+      console.error("Cancel failed", e)
+      alert("There was an error cancelling your reservation.")
+    }
   }
 
-  if (!user) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
-        <div className="text-lg text-gray-600 mb-4">Unable to load your profile. Please log in again.</div>
-        <Button
-          onClick={() => {
-            localStorage.removeItem("driverUser")
-            localStorage.removeItem("driverUserId")
-            window.location.href = "/sign-in"
-          }}
-          className="bg-emerald-600 text-white px-6"
-        >
-          Go to Sign In
-        </Button>
-      </div>
-    )
+  function addReservationAndShow(newReservation: Reservation | null) {
+    if (newReservation) {
+      setReservations(prev => [...prev, newReservation])
+      setCurrentView("reservations")
+    }
   }
 
-  /* ---------- ONBOARDING ---------- */
+  // ---------- DERIVED VALUES ----------
+  const unreadCount = notifications.filter(n => !(n.read ?? n.isRead)).length
+
+  const navigationItems = [
+    { id: "overview", label: "Overview", icon: Home, badge: null, shortcut: "Alt+1" },
+    { id: "discover", label: "Discover", icon: Search, badge: null, shortcut: "Alt+2" },
+    { id: "reservations", label: "Reservations", icon: Calendar, badge: reservations.length || null, shortcut: "Alt+3" },
+    { id: "favorites", label: "Favorites", icon: Heart, badge: favorites.length || null, shortcut: "Alt+4" },
+    { id: "profile", label: "Profile", icon: User, badge: null, shortcut: "Alt+5" },
+    { id: "settings", label: "Settings", icon: Settings, badge: null, shortcut: "Alt+6" },
+  ] as const
+
+  // ---------- EARLY RETURNS (after ALL hooks) ----------
+  if (loadingUser) return <LoadingState message="Loading your profile..." />
+  if (!user) return <LoadingState message="Preparing your dashboard..." />
   if (!isProfileComplete(user)) {
     return (
       <OnboardingForm
         initialData={user}
-        onComplete={async (formData) => {
+        onComplete={async formData => {
           try {
             const res = await api.updateProfile(user.id, {
               fullName: formData.fullName,
@@ -296,51 +390,24 @@ export default function DriverPage() {
       />
     )
   }
-
-  /* ---------- LOCATION PERMISSION GATE ---------- */
   if (!location) {
     return (
       <LocationPermission
-        onLocation={(loc) => {
-          setLocation(loc)
-          setLocationPending(false)
+        onLocation={loc => {
+          const lat = +loc.lat
+          const lng = +loc.lng
+            if (isFinite(lat) && isFinite(lng)) {
+              try { localStorage.setItem("driverLastLocation", JSON.stringify({ lat, lng })) } catch {}
+              setLocation({ lat, lng })
+            }
         }}
-        onRequest={() => {
-          setLocationPending(true)
-          setLocationError(null)
-        }}
-        onError={(msg: string) => {
-          setLocationPending(false)
-          setLocationError(msg || "Unable to get location.")
-        }}
-      >
-        {locationPending ? (
-          <LoadingState message="Loading your location..." />
-        ) : locationError ? (
-          <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 gap-4">
-            <p className="text-sm text-red-600">{locationError}</p>
-            <Button onClick={() => setLocationPending(true)} size="sm">
-              Retry
-            </Button>
-          </div>
-        ) : null}
-      </LocationPermission>
+      />
     )
   }
 
-  /* ---------- NAV ITEMS ---------- */
-  const navigationItems = [
-    { id: "overview", label: "Overview", icon: Home, badge: null, shortcut: "Alt+1" },
-    { id: "discover", label: "Discover", icon: Search, badge: null, shortcut: "Alt+2" },
-    { id: "reservations", label: "Reservations", icon: Calendar, badge: null, shortcut: "Alt+3" },
-    { id: "favorites", label: "Favorites", icon: Heart, badge: favorites.length || null, shortcut: "Alt+4" },
-    { id: "profile", label: "Profile", icon: User, badge: null, shortcut: "Alt+5" },
-    { id: "settings", label: "Settings", icon: Settings, badge: null, shortcut: "Alt+6" },
-  ] as const
-
-  /* ---------- CONTENT RENDERER ---------- */
-  const renderContent = () => {
-    const safeUpdateFavorites = async (newFavs: string[]) => {
+  // ---------- CONTENT RENDERER ----------
+  function renderContent() {
+    async function safeUpdateFavorites(newFavs: string[]) {
       if (!user?.id) return
       try {
         await api.updateFavorites(user.id, newFavs)
@@ -365,10 +432,17 @@ export default function DriverPage() {
         setFavorites={safeUpdateFavorites}
         activeView={currentView}
         setActiveView={setCurrentView}
+        reservations={
+          reservationStatusFilter === "all"
+            ? reservations
+            : reservations.filter(r => (r as any).status === reservationStatusFilter)
+        }
+        handleCancelReservation={handleCancelReservation}
       />
     )
   }
 
+  // ---------- RETURN JSX (unchanged below, except onComplete uses helper) ----------
   return (
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-gray-50">
@@ -503,10 +577,27 @@ export default function DriverPage() {
         {reservationFlow && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50">
             <ReservationFlow
-              station={reservationFlow.station}
+              station={{
+                ...reservationFlow.station,
+                address:
+                  typeof reservationFlow.station.address === "object"
+                    ? [
+                        reservationFlow.station.address.street,
+                        reservationFlow.station.address.city,
+                        reservationFlow.station.address.state,
+                        reservationFlow.station.address.zipCode,
+                        reservationFlow.station.address.country,
+                      ]
+                        .filter(Boolean)
+                        .join(", ")
+                    : reservationFlow.station.address,
+              }}
               chargerId={reservationFlow.chargerId}
               user={user}
-              onComplete={() => setReservationFlow(null)}
+              onComplete={resv => {
+                addReservationAndShow(resv)
+                setReservationFlow(null)
+              }}
             />
           </motion.div>
         )}
@@ -552,9 +643,7 @@ export default function DriverPage() {
                   return (
                     <div
                       key={n._id}
-                      className={`p-3 rounded-lg border text-sm ${
-                        unread ? "bg-emerald-50 border-emerald-200" : "bg-white border-gray-200"
-                      }`}
+                      className={`p-3 rounded-lg border text-sm ${unread ? "bg-emerald-50 border-emerald-200" : "bg-white border-gray-200"}`}
                     >
                       <div className="font-medium text-gray-800">{n.title || n.type || "Notification"}</div>
                       {n.message || n.body ? (

@@ -13,6 +13,10 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Plus, X, Upload, MapPin, Clock, Zap, DollarSign, Camera, CheckCircle, Wifi, Coffee, ShoppingBag, ParkingSquare, Utensils, BadgeCheck } from "lucide-react"
 import type { Connector } from "../types"
 import { CONNECTOR_TYPES, CONNECTOR_STATUSES } from "@/app/shared/connectors"
+import { v4 as uuidv4 } from "uuid" // (if you don't have uuid installed, replace with custom generator)
+
+// Fallback simple id generator if uuid not installed:
+// const uuidv4 = () => crypto?.randomUUID?.() || 'tmp-' + Math.random().toString(36).slice(2,10)
 
 const STATION_API_BASE =
   (process.env.NEXT_PUBLIC_STATION_SERVICE_URL || "http://localhost:5000").replace(/\/+$/,"")
@@ -80,7 +84,7 @@ export function AddStationModal({
       longitude: 0,
     },
     operatingHours: {} as OperatingHours,
-    connectors: [] as Connector[],
+    connectors: [] as (Connector & { tempId?: string })[],
     pricing: {
       model: "per_kwh",
       perKwh: 0,
@@ -93,11 +97,25 @@ export function AddStationModal({
   })
 
   const [newConnector, setNewConnector] = useState({
-    type: "CCS",
+    type: "CCS",            // store canonical enum value
     chargerLevel: "",
     powerKW: 0,
     status: "Available",
   })
+
+  // Canonicalization map (display -> enum) if ever needed
+  function normalizeConnectorType(t: string): string {
+    if (!t) return t
+    const upper = t.toUpperCase().replace(/\s+/g, "")
+    if (upper === "TYPE1") return "TYPE1"
+    if (upper === "TYPE2") return "TYPE2"
+    if (upper === "CHADEMO") return "CHADEMO"
+    if (upper === "TESLA") return "TESLA"
+    if (upper.startsWith("CCS2")) return "CCS2"
+    if (upper.startsWith("CCS1")) return "CCS1"
+    if (upper.startsWith("CCS")) return "CCS"
+    return upper
+  }
 
   const availableAmenities = [
     { id: "wifi", name: "Wi-Fi", icon: <Wifi className="h-5 w-5 text-emerald-600" /> },
@@ -178,7 +196,7 @@ export function AddStationModal({
         },
         operatingHours,
         connectors: formData.connectors.map(c => ({
-          type: c.type,
+          type: normalizeConnectorType(c.type),
           chargerLevel: c.chargerLevel,
           powerKW: c.powerKW,
           status: c.status || "Available",
@@ -259,7 +277,8 @@ export function AddStationModal({
       connectors: [
         ...prev.connectors,
         {
-          type: newConnector.type,
+          tempId: uuidv4(),
+          type: normalizeConnectorType(newConnector.type),
           chargerLevel: newConnector.chargerLevel.trim(),
           powerKW: newConnector.powerKW,
           status: newConnector.status,
@@ -596,7 +615,7 @@ export function AddStationModal({
             <div className="space-y-4">
               {formData.connectors.map((connector, index) => (
                 <Card
-                  key={connector._id}
+                  key={connector._id || connector.tempId || index}
                   className="border-gray-200 hover:border-gray-300 transition-all duration-200 hover:shadow-md"
                 >
                   <CardContent className="p-6">
@@ -624,19 +643,19 @@ export function AddStationModal({
                           value={connector.type}
                           onValueChange={(value) => {
                             const updatedConnectors = [...formData.connectors]
-                            updatedConnectors[index].type = value as any
-                            setFormData((prev) => ({ ...prev, connectors: updatedConnectors }))
+                            updatedConnectors[index].type = normalizeConnectorType(value)
+                            setFormData(prev => ({ ...prev, connectors: updatedConnectors }))
                           }}
                         >
                           <SelectTrigger className="h-11 border-gray-200 focus:border-emerald-500 focus:ring-emerald-500">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="Type 1">Type 1</SelectItem>
-                            <SelectItem value="Type 2">Type 2</SelectItem>
+                            <SelectItem value="TYPE1">Type 1 (J1772)</SelectItem>
+                            <SelectItem value="TYPE2">Type 2</SelectItem>
                             <SelectItem value="CCS">CCS</SelectItem>
-                            <SelectItem value="CHAdeMO">CHAdeMO</SelectItem>
-                            <SelectItem value="Tesla">Tesla</SelectItem>
+                            <SelectItem value="CHADEMO">CHAdeMO</SelectItem>
+                            <SelectItem value="TESLA">Tesla</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -648,7 +667,7 @@ export function AddStationModal({
                           onValueChange={(value) => {
                             const updatedConnectors = [...formData.connectors]
                             updatedConnectors[index].chargerLevel = value as any
-                            setFormData((prev) => ({ ...prev, connectors: updatedConnectors }))
+                            setFormData(prev => ({ ...prev, connectors: updatedConnectors }))
                           }}
                         >
                           <SelectTrigger className="h-11 border-gray-200 focus:border-emerald-500 focus:ring-emerald-500">
@@ -670,7 +689,7 @@ export function AddStationModal({
                           onChange={(e) => {
                             const updatedConnectors = [...formData.connectors]
                             updatedConnectors[index].powerKW = Number.parseInt(e.target.value) || 0
-                            setFormData((prev) => ({ ...prev, connectors: updatedConnectors }))
+                            setFormData(prev => ({ ...prev, connectors: updatedConnectors }))
                           }}
                           placeholder="22"
                           className="h-11 border-gray-200 focus:border-emerald-500 focus:ring-emerald-500"
@@ -696,9 +715,13 @@ export function AddStationModal({
                 <select
                   className="input col-span-2"
                   value={newConnector.type}
-                  onChange={e => setNewConnector(c => ({ ...c, type: e.target.value }))}
+                  onChange={e => setNewConnector(c => ({ ...c, type: normalizeConnectorType(e.target.value) }))}
                 >
-                  {CONNECTOR_TYPES.map(t => <option key={t}>{t}</option>)}
+                  <option value="TYPE1">Type 1 (J1772)</option>
+                  <option value="TYPE2">Type 2</option>
+                  <option value="CCS">CCS</option>
+                  <option value="CHADEMO">CHAdeMO</option>
+                  <option value="TESLA">Tesla</option>
                 </select>
                 <input
                   className="input"
@@ -735,7 +758,8 @@ export function AddStationModal({
                       connectors: [
                         ...prev.connectors,
                         {
-                          type: newConnector.type,
+                          tempId: uuidv4(),
+                          type: normalizeConnectorType(newConnector.type),
                           chargerLevel: newConnector.chargerLevel.trim(),
                           powerKW: newConnector.powerKW,
                           status: newConnector.status,
@@ -750,7 +774,10 @@ export function AddStationModal({
               </div>
               <div className="space-y-2">
                 {formData.connectors.map((c:any, i:number) => (
-                  <div key={`${c.type}-${i}`} className="flex items-center justify-between text-xs bg-gray-50 px-3 py-2 rounded">
+                  <div
+                    key={c._id || c.tempId || `conn-${i}`}
+                    className="flex items-center justify-between text-xs bg-gray-50 px-3 py-2 rounded"
+                  >
                     <span>{c.type} • {c.chargerLevel} • {c.powerKW}kW • {c.status}</span>
                     <button
                       type="button"

@@ -8,7 +8,7 @@ export interface VehicleDetails {
   make: string
   model: string
   year?: number
-  batteryCapacityKWh?: number
+  batteryCapacityKWh?: number // Added for consistency
   primaryConnector: ConnectorType
   adapters: ConnectorType[]
   maxAcPowerKw?: number
@@ -18,23 +18,27 @@ export interface VehicleDetails {
 
 // Extend CarOwner / Driver profile if not already
 export interface CarOwner {
-  id: string
-  email: string
-  name?: string
-  vehicle?: VehicleDetails
-  favorites?: string[]
-  chargingHistory?: Reservation[]
-  paymentMethods?: string[]
-  preferences?: Preferences
+  id: string;
+  _id: string;
+  email: string;
+  fullName?: string;
+  vehicleDetails: VehicleDetails; // Changed from vehicle
+  favorites?: string[];
+  chargingHistory?: Reservation[];
+  paymentMethods?: string[];
+  preferences?: Preferences;
+  reservations?: Reservation[];
 }
 
 // Replace old Connector type (string) with enum-based:
 export type Connector = {
-  id: string
-  type: ConnectorType
-  power: number
-  status: "available" | "busy" | "offline"
-}
+  id: string; // This will be the UI-facing ID
+  backendId?: string; // This will store the actual _id from the database
+  type: ConnectorType;
+  power: number;
+  status: "available" | "busy" | "offline";
+};
+
 
 // Ensure any Station interface uses: connectors: Connector[]
 // (Adjust any creation sites to cast/map to ConnectorType if needed)
@@ -58,15 +62,21 @@ export type Station = {
   distance?: number
   rating?: string | number
   reviews?: Review[]
+  photos?: string[];
 }
 
 export type Reservation = {
   id: string
   stationId: string
   chargerId: string
+  startTime: string
+  endTime: string
   expiresAt: string
   paymentMethod?: "Visa" | "OnSite"
-  status?: "active" | "expired" | "cancelled"
+  status?: "Confirmed" | "Active" | "Completed" | "Cancelled" | "Expired"
+  station?: Pick<Station, "name" | "address">;
+  batteryTarget?: number; // Added for consistency
+  estimatedCost?: number; // Added for consistency
 }
 
 export type Reclamation = {

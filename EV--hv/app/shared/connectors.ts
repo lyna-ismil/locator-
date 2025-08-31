@@ -1,6 +1,32 @@
-export const CONNECTOR_TYPES = ["TYPE1", "TYPE2", "CHAdeMO", "CCS", "TESLA", "GB/T"] as const
-
+// Canonical (normalized) connector tokens – must match normalizeConnector output
+export const CONNECTOR_TYPES = [
+  "TYPE1",
+  "TYPE2",
+  "CHADEMO",
+  "CCS",
+  "CCS1",
+  "CCS2",
+  "TESLA",
+  "GB_T",
+  "SCHUKO",
+  "TYPE3",
+] as const
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number]
+
+// Legacy aliases (input values that will be normalized). Kept only if you need to validate raw user input.
+export const CONNECTOR_ALIASES: Record<string, ConnectorType> = {
+  CHAdeMO: "CHADEMO",
+  "GB/T": "GB_T",
+  MENNEKES: "TYPE2",
+  J1772: "TYPE1",
+  NACS: "TESLA",
+  COMBO1: "CCS1",
+  COMBO2: "CCS2",
+}
+
+export function isConnectorType(v: string): v is ConnectorType {
+  return (CONNECTOR_TYPES as readonly string[]).includes(v)
+}
 
 export const CONNECTOR_STATUSES = ["available", "busy", "offline", "maintenance"] as const
 

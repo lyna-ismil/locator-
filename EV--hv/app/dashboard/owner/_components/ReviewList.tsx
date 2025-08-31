@@ -247,3 +247,103 @@ export function ReviewList({ reviews, onDataChange }: ReviewListProps) {
     </div>
   )
 }
+
+/**
+ * ReservationList
+ * Robust display of reservation details with graceful fallbacks.
+ */
+export function ReservationList({ reservations }: { reservations: any[] }) {
+  if (!reservations?.length) {
+    return (
+      <div className="text-center py-12 text-gray-500">
+        No reservations found.
+      </div>
+    )
+  }
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case "Confirmed":
+        return "bg-blue-100 text-blue-800"
+      case "Active":
+        return "bg-green-100 text-green-800"
+      case "Completed":
+        return "bg-gray-100 text-gray-800"
+      case "Cancelled":
+        return "bg-red-100 text-red-800"
+      default:
+        return "bg-gray-100 text-gray-800"
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {reservations.map((r) => {
+        const stationName =
+          r.stationId?.stationName ||
+          r.station?.name ||
+          (typeof r.stationId === "object" && r.stationId !== null ? r.stationId.name : r.stationId) ||
+          "Station"
+
+        const customerName =
+          r.customer?.name ||
+          r.customer?.fullName ||
+          r.user?.name ||
+          r.user?.fullName ||
+          r.userId?.fullName ||
+          (typeof r.userId === "object" && r.userId !== null ? (r.userId.name || r.userId.fullName) : r.userId) ||
+          "User"
+
+        const vehicle = r.vehicleInfo || r.vehicle || {}
+        const vehicleLabel = vehicle.make
+          ? `${vehicle.make} ${vehicle.model || ""} ${vehicle.year ? `(${vehicle.year})` : ""}`.trim()
+          : "—"
+
+        return (
+          <Card key={r._id || r.id} className="bg-white/90 border border-gray-100 shadow-lg">
+            <CardHeader className="pb-3">
+              <div className="flex items-start justify-between">
+                <div>
+                  <CardTitle className="text-lg">{stationName}</CardTitle>
+                  <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
+                    <User className="h-3 w-3" />
+                    {customerName}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end">
+                  <Badge className={`text-xs rounded-full py-1 px-2 ${getStatusColor(r.status)}`}>
+                    {r.status}
+                  </Badge>
+                  <span className="text-xs text-gray-500">
+                    {new Date(r.createdAt).toLocaleDateString()}
+                  </span>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <Car className="h-5 w-5 text-gray-400" />
+                  <span className="text-sm text-gray-700">{vehicleLabel}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Clock className="h-5 w-5 text-gray-400" />
+                  <span className="text-sm text-gray-700">
+                    {new Date(r.startTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} -{" "}
+                    {new Date(r.endTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </div>
+              </div>
+
+              {r.note && (
+                <div className="text-sm text-gray-600">
+                  <span className="font-medium text-gray-800">Note:</span> {r.note}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )
+      })}
+    </div>
+  )
+}

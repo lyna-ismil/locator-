@@ -191,7 +191,56 @@ router.delete('/:id', async (req,res) => {
   }
 })
 
-// OPTIONAL: adjust /signup to ensure email/password required distinctly
+// Ensure a single exported list of allowed connector statuses
+const ALLOWED_CONNECTOR_STATUSES = ["Available","Unavailable","InUse","OutOfOrder","Faulted"]
+
+// PATCH: update single connector status (expanded to accept 'Unavailable' etc. + better matching & logging)
+router.patch('/:stationId/connectors/:connectorId', async (req, res) => {
+  const { stationId, connectorId } = req.params
+  const { status } = req.body
+
+  if (!status) return res.status(400).json({ msg: 'Status is required.' })
+  if (!ALLOWED_CONNECTOR_STATUSES.includes(status)) {
+    return res.status(400).json({
+      msg: `Invalid status. Allowed: ${ALLOWED_CONNECTOR_STATUSES.join(', ')}`,
+      received: status
+    })
+  }
+
+  try {
+    const station = await Station.findById(stationId)
+    if (!station) return res.status(404).json({ msg: 'Station not found.' })
+
+    // Try subdocument _id first
+    let connector = station.connectors.id(connectorId)
+
+    // Fallback: match by custom id or connectorId field if you store it
+    if (!connector) {
+      connector = station.connectors.find(c =>
+        String(c._id) === String(connectorId) ||
+        String(c.id) === String(connectorId) ||
+        String(c.connectorId) === String(connectorId)
+      )
+    }
+    if (!connector) {
+      return res.status(404).json({
+        msg: 'Connector not found.',
+        connectorId,
+        availableConnectorIds: station.connectors.map(c => c._id)
+      })
+    }
+
+    connector.status = status
+    await station.save()
+
+    console.log(`[stations] Connector ${connectorId} @ station ${stationId} -> ${status}`)
+    res.json({ msg: 'Connector status updated.', connector })
+  } catch (e) {
+    console.error('Update connector status error', e)
+    res.status(500).json({ msg: 'Server Error', error: e.message })
+  }
+})
+
 router.post('/signup', async (req,res) => {
   console.log('[stations] POST /signup payload:', JSON.stringify(req.body))
   try {

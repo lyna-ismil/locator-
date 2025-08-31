@@ -8,12 +8,13 @@ const ALLOWED_CONNECTORS = [
 const CONNECTOR_STATUSES = ["Available","InUse","OutOfOrder"]
 
 // Connector subdocument
+// Changed to allow generated _id per connector (was _id: false)
 const connectorSchema = new Schema({
   type: { type: String, enum: ALLOWED_CONNECTORS, required: true, uppercase: true, trim: true },
   chargerLevel: { type: String, required: true, trim: true },
   powerKW: { type: Number, required: true, min: 1 },
   status: { type: String, enum: CONNECTOR_STATUSES, default: "Available" }
-}, { _id: false })
+}) // default _id:true
 
 // GeoJSON Point
 const pointSchema = new Schema({

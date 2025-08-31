@@ -72,21 +72,21 @@ const dashboardIconFactory = (() => {
 const dashboardUserIcon = L.divIcon({
   className: "dashboard-user-pin",
   html: `<div style="
-    width:16px;height:16px;border-radius:50%;
+    width:20px;height:20px;border-radius:50%;
     background:linear-gradient(135deg, #2563eb, #3b82f6);
-    box-shadow:0 0 0 3px rgba(59,130,246,.25),0 0 0 4px rgba(255,255,255,.95),0 2px 8px rgba(0,0,0,.15);
-    border:1px solid #fff;
+    box-shadow:0 0 0 4px rgba(59,130,246,.25),0 0 0 6px rgba(255,255,255,.95),0 4px 12px rgba(0,0,0,.15);
+    border:2px solid #fff;
     animation:pulse 2s infinite;
   "></div>
   <style>
     @keyframes pulse {
       0%, 100% { transform: scale(1); }
-      50% { transform: scale(1.05); }
+      50% { transform: scale(1.1); }
     }
   </style>`,
-  iconSize: [16, 16],
-  iconAnchor: [8, 8],
-})
+  iconSize: [20, 20],
+  iconAnchor: [10, 10],
+});
 
 function DashboardFitBounds({
   stations,
@@ -181,8 +181,8 @@ export default function DashboardMap({
           />
           {showUserLocation && userLocation && (
             <Marker position={[userLocation.lat, userLocation.lng]} icon={dashboardUserIcon}>
-              <Tooltip direction="top" offset={[0, -4]} opacity={0.9} className="text-xs">
-                <div className="font-medium text-blue-700">Your location</div>
+              <Tooltip direction="top" offset={[0, -10]} opacity={0.95} permanent>
+                <div className="font-semibold text-blue-700">Your Location</div>
               </Tooltip>
             </Marker>
           )}

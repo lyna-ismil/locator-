@@ -1,5 +1,5 @@
 "use client"
-import React, { useState } from "react"
+import React, { useState, useEffect } from "react"
 import { Navigation, AlertTriangle } from "lucide-react"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -7,11 +7,28 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
 export default function LocationPermission({ onLocation }: { onLocation: (loc: { lat: number; lng: number }) => void }) {
-const [denied, setDenied] = useState(false)
+  const [denied, setDenied] = useState(false)
   const [manual, setManual] = useState<{ lat: number; lng: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  useEffect(() => {
+    // auto‑request on mount
+    requestLocation()
+    // try previously stored coords if permission was previously granted
+    try {
+      const saved = localStorage.getItem("driverLastLocation")
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (isFinite(parsed.lat) && isFinite(parsed.lng)) {
+          onLocation({ lat: parsed.lat, lng: parsed.lng })
+        }
+      }
+    } catch {}
+  }, [])
+
   function requestLocation() {
+    setError(null)
+    setDenied(false)
     if (!navigator.geolocation) {
       setDenied(true)
       setError("Geolocation is not supported by your browser.")
@@ -19,23 +36,41 @@ const [denied, setDenied] = useState(false)
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        onLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude })
+        const lat = +pos.coords.latitude.toFixed(6)
+        const lng = +pos.coords.longitude.toFixed(6)
+        if (!isFinite(lat) || !isFinite(lng)) {
+          setError("Received invalid coordinates.")
+          return
+        }
+        try {
+          localStorage.setItem("driverLastLocation", JSON.stringify({ lat, lng }))
+        } catch {}
+        onLocation({ lat, lng })
       },
-      (err) => {
+      () => {
         setDenied(true)
-        setError("Location access denied. Please enter your location manually.")
+        setError("Location access denied. You can enter coordinates manually.")
       },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 },
     )
   }
 
   function handleManual(e: React.FormEvent) {
     e.preventDefault()
-    if (!manual?.lat || !manual?.lng) {
-      setError("Please enter both latitude and longitude.")
+    if (manual == null) return
+    const lat = parseFloat(String(manual.lat))
+    const lng = parseFloat(String(manual.lng))
+    if (!isFinite(lat) || !isFinite(lng)) {
+      setError("Please enter valid numeric latitude & longitude.")
+      return
+    }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      setError("Latitude must be between -90 and 90, longitude between -180 and 180.")
       return
     }
     setError(null)
-    onLocation(manual)
+    try { localStorage.setItem("driverLastLocation", JSON.stringify({ lat, lng })) } catch {}
+    onLocation({ lat, lng })
   }
 
   return (
