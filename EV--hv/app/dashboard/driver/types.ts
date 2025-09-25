@@ -36,7 +36,7 @@ export type Connector = {
   backendId?: string; // This will store the actual _id from the database
   type: ConnectorType;
   power: number;
-  status: "available" | "busy" | "offline";
+  status: "available" | "InUse" | "OutOfOrder" | "Unavailable" | "Faulted";
 };
 
 
@@ -87,4 +87,43 @@ export type Reclamation = {
   photos?: string[]
   contactEmail: string
   status: "open" | "in_review" | "resolved"
+}
+
+// New types based on suggested changes
+export interface ConnectorInfo {
+  id?: string
+  type?: string
+  status?: string
+  chargerLevel?: string
+  powerKW?: number
+}
+
+export interface Station {
+  _id?: string
+  id?: string
+  stationName?: string
+  name?: string
+  address?: any
+  pricing?: string
+  connectors: any[]
+}
+
+export interface Reservation {
+  _id?: string
+  id?: string
+  userId?: string
+  stationId: any            // can be string or populated station object
+  connectorId: string
+  connectorInfo?: ConnectorInfo
+  startTime?: string
+  endTime?: string
+  expiresAt?: string
+  status: string
+  cost?: number
+  reservationFee?: number
+  energyDelivered?: number
+  createdAt?: string
+  updatedAt?: string
+  // derived (frontend)
+  duration?: number
 }

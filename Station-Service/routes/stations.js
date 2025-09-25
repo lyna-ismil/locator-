@@ -2,6 +2,7 @@ const express = require('express')
 const router = express.Router()
 const Station = require('../models/Station')
 const mongoose = require('mongoose')
+const axios = require('axios')
 const { ALLOWED_CONNECTORS } = Station
 
 function normalizeConnectorType(raw = "") {
@@ -300,5 +301,34 @@ router.post('/signin', async (req,res) => {
   }
 })
 
+router.get('/with-owners', async (req, res) => {
+  try {
+    // Fetch all stations
+    const stations = await Station.find({}).lean();
+
+    // Group stations by owner (using email and ownerId from the station itself)
+    const ownersMap = {};
+    stations.forEach(station => {
+      // Use email as unique key for owner
+      const ownerKey = station.email || station.ownerId;
+      if (!ownerKey) return;
+
+      if (!ownersMap[ownerKey]) {
+        ownersMap[ownerKey] = {
+          id: ownerKey,
+          name: station.ownerId || "Unknown Owner", // If you store name, use it here
+          email: station.email,
+          stations: [],
+        };
+      }
+      ownersMap[ownerKey].stations.push(station.stationName || "Unnamed Station");
+    });
+
+    res.json(Object.values(ownersMap));
+  } catch (e) {
+    console.error('Error fetching stations with owners:', e);
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
 
 module.exports = router

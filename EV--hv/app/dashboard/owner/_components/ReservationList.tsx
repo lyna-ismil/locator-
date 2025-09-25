@@ -2,11 +2,23 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { User, Car, Clock, Zap } from "lucide-react"
 
+interface ReservationListProps {
+  reservations: any[]
+  refreshing?: boolean
+  lastUpdated?: string
+  onRefresh?: () => void
+}
+
 /**
  * ReservationList
  * Displays station, customer and vehicle details for each reservation.
  */
-export function ReservationList({ reservations }: { reservations: any[] }) {
+export function ReservationList({
+  reservations,
+  refreshing,
+  lastUpdated,
+  onRefresh,
+}: ReservationListProps) {
   if (!reservations.length) {
     return (
       <div className="text-center py-12 text-gray-500">
@@ -30,75 +42,91 @@ export function ReservationList({ reservations }: { reservations: any[] }) {
     }
   }
 
+  function fmt(dt?: string) {
+    if (!dt) return "—"
+    const d = new Date(dt)
+    if (isNaN(d.getTime())) return "—"
+    return d.toLocaleString()
+  }
+
   return (
     <div className="space-y-4">
-      {reservations.map((r) => {
-        const stationName =
-          r.stationId?.stationName ||
-          r.station?.name ||
-            r.stationId?.name ||
-          r.stationId ||
-          "Station"
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold text-gray-800">Station Reservations</h3>
+        <div className="flex items-center gap-3 text-xs text-gray-500">
+          <span>Updated: {lastUpdated || "—"}</span>
+          <button
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="px-2 py-1 border rounded bg-white hover:bg-gray-50 disabled:opacity-50"
+          >
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
+      </div>
+      {reservations.length === 0 && (
+        <div className="p-6 bg-gray-50 rounded-lg text-center text-sm text-gray-600">
+          No reservations yet.
+        </div>
+      )}
+      <div className="space-y-3">
+        {reservations.map((r) => {
+          const rid = r._id || r.id
+          const station =
+            typeof r.stationId === "object" ? r.stationId : { stationName: r.stationId }
+          const status = r.status
+          const vehicle = r.vehicleInfo || r.vehicle || {}
+          const vehicleLabel = vehicle.make
+            ? `${vehicle.make} ${vehicle.model || ""} ${vehicle.year ? `(${vehicle.year})` : ""}`.trim()
+            : "—"
 
-        const customerName =
-          r.customer?.name ||
-          r.customer?.fullName ||
-          r.user?.name ||
-          r.userId ||
-          "User"
-
-        const vehicle = r.vehicleInfo || r.vehicle || {}
-        const vehicleLabel = vehicle.make
-          ? `${vehicle.make} ${vehicle.model || ""} ${vehicle.year ? `(${vehicle.year})` : ""}`.trim()
-          : "—"
-
-        return (
-          <Card key={r._id || r.id} className="bg-white/90 border border-gray-100 shadow-lg">
-            <CardHeader className="pb-3">
-              <div className="flex items-start justify-between">
-                <div>
-                  <CardTitle className="text-lg">{stationName}</CardTitle>
-                  <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
-                    <User className="h-3 w-3" />
-                    {customerName}
-                  </div>
+          return (
+            <div
+              key={rid}
+              className="border rounded-lg p-4 bg-white flex flex-col md:flex-row md:items-center md:justify-between gap-3 shadow-sm"
+            >
+              <div className="flex-1">
+                <div className="font-semibold text-gray-800">
+                  {station.stationName || "Station"}
                 </div>
-                <Badge className={getStatusColor(r.status)}>{r.status || "—"}</Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                <div className="flex items-start gap-2">
-                  <Clock className="h-4 w-4 text-gray-500 mt-0.5" />
-                  <div>
-                    <strong>Start:</strong>{" "}
-                    {r.startTime ? new Date(r.startTime).toLocaleString() : "—"}
-                  </div>
+                <div className="text-xs text-gray-500">
+                  {fmt(r.startTime)} → {fmt(r.endTime)}
                 </div>
-                <div className="flex items-start gap-2">
-                  <Clock className="h-4 w-4 text-gray-500 mt-0.5" />
-                  <div>
-                    <strong>End:</strong>{" "}
-                    {r.endTime ? new Date(r.endTime).toLocaleString() : "—"}
-                  </div>
-                </div>
-                <div className="flex items-start gap-2">
-                  <Zap className="h-4 w-4 text-gray-500 mt-0.5" />
-                  <div>
-                    <strong>Connector:</strong> {r.connectorId || r.chargerId || "—"}
-                  </div>
-                </div>
-                <div className="flex items-start gap-2">
-                  <Car className="h-4 w-4 text-gray-500 mt-0.5" />
-                  <div>
-                    <strong>Vehicle:</strong> {vehicleLabel}
-                  </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  Connector: {r.connectorId}
+                  {r.connectorInfo?.type
+                    ? ` (${r.connectorInfo.type}${
+                        r.connectorInfo.powerKW ? ` ${r.connectorInfo.powerKW}kW` : ""
+                      })`
+                    : ""}
                 </div>
               </div>
-            </CardContent>
-          </Card>
-        )
-      })}
+              <div className="flex items-center gap-4">
+                <span
+                  className={`text-xs px-2 py-1 rounded-full font-medium ${
+                    status === "Active"
+                      ? "bg-emerald-600 text-white"
+                      : status === "Completed"
+                      ? "bg-gray-200 text-gray-700"
+                      : status === "Cancelled"
+                      ? "bg-red-100 text-red-600"
+                      : status === "Expired"
+                      ? "bg-orange-100 text-orange-600"
+                      : "bg-blue-100 text-blue-600"
+                  }`}
+                >
+                  {status}
+                </span>
+                {typeof r.cost === "number" && (
+                  <span className="text-sm font-medium text-gray-700">
+                    {(r.cost || r.reservationFee || 0).toFixed(2)} TND
+                  </span>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -26,6 +26,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import type { CarOwner, Station, Reservation } from "./types"
+import type { Reservation } from "./types"
 
 /* ---------- GENERIC LOADING COMPONENT ---------- */
 const LoadingState = ({ message }: { message: string }) => (
@@ -57,77 +58,25 @@ const api = {
   },
   getFavorites: async (userId: string) => {
     const res = await fetch(`http://localhost:5000/car-owners/${userId}/favorites`)
-    if (!res.ok) throw new Error("Failed to fetch favorites")
+    if (!res.ok) return []
     return res.json()
   },
   updateFavorites: async (userId: string, favorites: string[]) => {
-    const res = await fetch(`http://localhost:5000/car-owners/${userId}/favorites`, {
+    await fetch(`http://localhost:5000/car-owners/${userId}/favorites`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ favorites }),
     })
-    if (!res.ok) throw new Error("Failed to update favorites")
-    return res.json()
   },
-  // UPDATED: enrich each reservation with full station details if not already populated
-  getReservations: async (userId: string): Promise<Reservation[]> => {
-    if (!userId) return []
+  fetchReservations: async (userId: string, statuses: string[]): Promise<Reservation[]> => {
     const url = `http://localhost:5000/reservations?userId=${encodeURIComponent(
       userId
-    )}&status=Confirmed,Active` // station route already populates (if backend supports); keep populate param optional
-    try {
-      const res = await fetch(url)
-      if (!res.ok) {
-        console.warn("Failed to fetch reservations.")
-        return []
-      }
-      const raw = await res.json()
-      if (!Array.isArray(raw)) return []
-
-      // Enrich missing station objects
-      const cache = new Map<string, any>()
-      async function fetchStation(id: string) {
-        if (cache.has(id)) return cache.get(id)
-        try {
-          const rs = await fetch(`http://localhost:5000/stations/${id}`)
-          if (!rs.ok) throw new Error(String(rs.status))
-          const data = await rs.json()
-          cache.set(id, data)
-          return data
-        } catch {
-          return null
-        }
-      }
-
-      const enriched = await Promise.all(
-        raw.map(async (r: any) => {
-          if (r && r.stationId && typeof r.stationId === "object") {
-            return r
-          }
-            const sid = r.stationId?._id || r.stationId
-            if (!sid) return r
-            const station = await fetchStation(sid)
-            if (station) {
-              return {
-                ...r,
-                stationId: {
-                  _id: station._id || sid,
-                  stationName: station.stationName || station.name || "Unknown Station",
-                  address: station.address || "Address unavailable",
-                },
-              }
-            }
-            return r
-        })
-      )
-      return enriched
-    } catch (e) {
-      console.warn("Reservations enrichment failed:", e)
-      return []
-    }
+    )}&status=${statuses.join(",")}&populate=stationId`
+    const r = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store" })
+    if (!r.ok) return []
+    const data = await r.json()
+    return Array.isArray(data) ? data : []
   },
-
-  // NEW: cancel reservation
   cancelReservation: async (reservationId: string) => {
     const res = await fetch(`http://localhost:5000/reservations/${reservationId}`, {
       method: "PUT",
@@ -188,6 +137,7 @@ export default function DriverPage() {
   const [locationError, setLocationError] = useState<string | null>(null)
   const [favorites, setFavorites] = useState<string[]>([])
   const [reservations, setReservations] = useState<Reservation[]>([])
+  const [history, setHistory] = useState<Reservation[]>([])
   const [reservationStatusFilter, setReservationStatusFilter] = useState<string>("all")
   const [selectedStation, setSelectedStation] = useState<Station | null>(null)
   const [reservationFlow, setReservationFlow] = useState<{ station: Station; chargerId: string } | null>(null)
@@ -197,6 +147,8 @@ export default function DriverPage() {
   const [loadingNotifications, setLoadingNotifications] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const [lastUpdated, setLastUpdated] = useState<string>("")
+  const [polling, setPolling] = useState<boolean>(false)
 
   const GATEWAY_BASE = (process.env.NEXT_PUBLIC_GATEWAY_BASE || "http://localhost:3001").replace(/\/$/, "")
 
@@ -245,15 +197,52 @@ export default function DriverPage() {
     }
   }, [loadingUser, user])
 
-  // central fetcher (no hooks inside)
+  // DERIVE status (Active) & duration util
+  function normalizeReservations(list: Reservation[]): Reservation[] {
+    const now = Date.now()
+    return list.map(r => {
+      let status = r.status
+      const start = r.startTime ? Date.parse(r.startTime) : null
+      const end = r.endTime ? Date.parse(r.endTime) : null
+      if (status === "Confirmed" && start && end && now >= start && now < end) {
+        status = "Active"
+      }
+      const duration =
+        start && end ? Math.max(0, Math.round((end - start) / 60000)) : r.duration
+      return { ...r, status, duration }
+    })
+  }
+
+  // UNIFIED FETCH (active + full history)
   async function fetchReservationsAndFavorites(uid: string) {
     try {
-      const favs = await api.getFavorites(uid).catch(() => [])
+      setPolling(true)
+      const [favs, activeRaw, historyRaw] = await Promise.all([
+        api.getFavorites(uid).catch(() => []),
+        api.fetchReservations(uid, ["Confirmed", "Active"]).catch(() => []),
+        api.fetchReservations(uid, ["Confirmed", "Active", "Completed", "Cancelled", "Expired"]).catch(
+          () => []
+        ),
+      ])
       setFavorites(Array.isArray(favs) ? favs : [])
-      const resv = await api.getReservations(uid)
-      setReservations(resv)
+      setReservations(normalizeReservations(activeRaw))
+      // De-dup history (some overlap)
+      const seen = new Set<string>()
+      const merged: Reservation[] = []
+      for (const r of historyRaw) {
+        const id = (r as any)._id || (r as any).id
+        if (!id) continue
+        if (!seen.has(id)) {
+          seen.add(id)
+          merged.push(r)
+        }
+      }
+      setHistory(normalizeReservations(merged))
+      setLastUpdated(new Date().toLocaleTimeString())
     } catch (e) {
       console.warn("Data fetch error:", e)
+    } finally {
+      setPolling(false)
     }
   }
 
@@ -261,7 +250,7 @@ export default function DriverPage() {
     const uid = user?.id || (user as any)?._id
     if (!uid) return
     fetchReservationsAndFavorites(uid)
-  }, [user?.id])
+  }, [user?.id, (user as any)?._id]) // FIX: include _id fallback so refresh works after reload/login
 
   useEffect(() => {
     const checkMobile = () => {
@@ -327,28 +316,25 @@ export default function DriverPage() {
     if (!confirm("Are you sure you want to cancel this reservation?")) return
     try {
       await api.cancelReservation(reservationId)
-      // Option 1: mutate locally
-      setReservations(prev =>
-        prev.map(r => {
-          const rid = (r as any)._id || (r as any).id
-          return rid === reservationId ? { ...r, status: "Cancelled" } : r
-        })
-      )
-      // Option 2 (strong consistency): re-fetch only reservations
       const uid = user?.id || (user as any)?._id
-      if (uid) {
-        const updated = await api.getReservations(uid)
-        setReservations(updated)
-      }
+      if (uid) await fetchReservationsAndFavorites(uid)
     } catch (e) {
       console.error("Cancel failed", e)
       alert("There was an error cancelling your reservation.")
     }
   }
 
-  function addReservationAndShow(newReservation: Reservation | null) {
+  // Update addReservationAndShow to refetch for connectorInfo
+  async function addReservationAndShow(newReservation: Reservation | null) {
     if (newReservation) {
-      setReservations(prev => [...prev, newReservation])
+      const uid = user?.id || (user as any)?._id
+      if (uid) {
+        // quick optimistic add
+        setReservations(prev => normalizeReservations([...prev, newReservation]))
+        setHistory(prev => normalizeReservations([...prev, newReservation]))
+        // full refresh to pull connectorInfo + populated station
+        fetchReservationsAndFavorites(uid)
+      }
       setCurrentView("reservations")
     }
   }
@@ -437,7 +423,14 @@ export default function DriverPage() {
             ? reservations
             : reservations.filter(r => (r as any).status === reservationStatusFilter)
         }
+        history={history}
         handleCancelReservation={handleCancelReservation}
+        onManualRefresh={() => {
+          const uid = user?.id || (user as any)?._id
+          if (uid) fetchReservationsAndFavorites(uid)
+        }}
+        lastUpdated={lastUpdated}
+        refreshing={polling}
       />
     )
   }

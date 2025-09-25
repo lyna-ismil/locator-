@@ -189,12 +189,11 @@ export default function StationDetails({
                         <div>
                           <div className="font-medium text-gray-800">{c.type}</div>
                           <div className="text-sm text-gray-600">
-                            {c.power}kW • {c.status}
+                            {c.powerKW}kW • {c.status}
                           </div>
                         </div>
                       </div>
                       <Button
-                        className="bg-emerald-600 hover:bg-emerald-700"
                         onClick={() => onReserve(c.id)}
                         disabled={c.status !== "available"}
                       >

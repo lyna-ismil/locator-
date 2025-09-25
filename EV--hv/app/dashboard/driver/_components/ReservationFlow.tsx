@@ -41,7 +41,7 @@ const api = {
     startTime: string
     endTime: string
   }): Promise<Reservation> => {
-    console.debug("[ReservationFlow] sending reservation", reservationData)  // ADD
+    console.debug("[ReservationFlow] sending reservation", reservationData)
     const res = await fetch("http://localhost:5000/reservations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -51,7 +51,9 @@ const api = {
       const body = await res.json().catch(() => ({}))
       throw new Error(body.msg || `Reservation failed (HTTP ${res.status})`)
     }
-    return await res.json()
+    const json = await res.json()
+    // If backend returns reservation nested, unwrap
+    return json.reservation || json
   },
   getEstimates: async (stationId: string, chargerId: string) => {
     // Simulate API delay
@@ -62,6 +64,17 @@ const api = {
       energyNeeded: 25,
       peakPower: 150,
     }
+  },
+  getPrediction: async (predictionInput: any): Promise<{ predicted_value: number }> => {
+    const res = await fetch("http://127.0.0.1:8000/predict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(predictionInput),
+    })
+    if (!res.ok) {
+      throw new Error("Prediction API call failed")
+    }
+    return res.json()
   },
 }
 
@@ -81,12 +94,9 @@ export default function ReservationFlow({
   const [loading, setLoading] = useState(false)
   const [loadingEstimates, setLoadingEstimates] = useState(false)
   const [reservation, setReservation] = useState<Reservation | null>(null)
-  const [estimates, setEstimates] = useState({
-    cost: 12.5,
-    duration: 45,
-    energyNeeded: 25,
-    peakPower: 150,
-  })
+  const [estimatedCost, setEstimatedCost] = useState<number | null>(null);
+  const [estimatedDuration, setEstimatedDuration] = useState<number | null>(null);
+  const [energyNeeded, setEnergyNeeded] = useState<number | null>(null);
   const [batteryLevel, setBatteryLevel] = useState(25)
   const [targetLevel, setTargetLevel] = useState(80)
   // Added: card details state to prevent ReferenceError
@@ -120,6 +130,8 @@ export default function ReservationFlow({
   )
   const [durationMinutes, setDurationMinutes] = useState(30)
   const [scheduleError, setScheduleError] = useState<string | null>(null)
+  const [predictedDuration, setPredictedDuration] = useState<number | null>(null)
+  const [loadingPrediction, setLoadingPrediction] = useState(false)
 
   // When vehicle details are missing, show friendly prompt and close safely
   // Guard: require vehicle details (use vehicleDetails instead of vehicle)
@@ -163,41 +175,78 @@ export default function ReservationFlow({
 
   // Calculate estimates client-side based on vehicle & connector data
   React.useEffect(() => {
-    if (step !== "details") return
-    // require vehicle battery capacity and connector power to calculate
-    const batteryCapacity = user?.vehicleDetails?.batteryCapacityKWh
-    const connectorPower = connector?.power
-    if (!batteryCapacity || !connectorPower) return
+    if (step !== "details") return;
+    const batteryCapacity = user?.vehicleDetails?.batteryCapacityKWh;
+    const connectorPower = connector?.powerKW;
+    if (!batteryCapacity || !connectorPower) return;
 
-    setLoadingEstimates(true)
+    setLoadingEstimates(true);
 
-    const energyNeeded = ((targetLevel - batteryLevel) / 100) * batteryCapacity // kWh
-    const duration = connectorPower > 0 ? (energyNeeded / connectorPower) * 60 : 0 // minutes
-    const pricePerKwh = parsePricePerKwh(station.pricing)
-    const cost = energyNeeded * pricePerKwh
+    const neededKWh = ((targetLevel - batteryLevel) / 100) * batteryCapacity;
+    const durationMin = connectorPower > 0 ? (neededKWh / connectorPower) * 60 : 0;
 
-    // small delay to smooth UX
+    // Use the helper function to get the price per kWh from the station data
+    const pricePerKwh = parsePricePerKwh(station.pricing);
+    const cost = neededKWh * pricePerKwh;
+
+    // Use a small delay for a smoother UX
     const t = setTimeout(() => {
-      setEstimates({
-        cost: parseFloat(cost.toFixed(2)),
-        duration: Math.max(1, Math.round(duration)),
-        energyNeeded: parseFloat(energyNeeded.toFixed(1)),
-        peakPower: connectorPower,
-      })
-      setLoadingEstimates(false)
-    }, 500)
+      setEnergyNeeded(parseFloat(neededKWh.toFixed(1)));
+      setEstimatedDuration(Math.max(1, Math.round(durationMin)));
+      setEstimatedCost(parseFloat(cost.toFixed(2))); // Set the dynamically calculated cost
+      setLoadingEstimates(false);
+    }, 500);
 
-    return () => clearTimeout(t)
+    return () => clearTimeout(t);
   }, [
     step,
-    station.id,
-    chargerId,
     batteryLevel,
     targetLevel,
     user?.vehicleDetails?.batteryCapacityKWh,
-    connector?.power,
+    connector?.powerKW,
     station.pricing,
   ])
+
+  // Predict charging session duration when details change
+  React.useEffect(() => {
+    const fetchPrediction = async () => {
+      if (!user?.vehicleDetails) return
+
+      setLoadingPrediction(true)
+      try {
+        const now = new Date()
+        const startHourNorm = (now.getHours() * 60 + now.getMinutes()) / 1440
+
+        const predictionInput = {
+          weekday: (now.getDay() >= 1 && now.getDay() <= 5) ? 1 : 0,
+          weekend: (now.getDay() === 0 || now.getDay() === 6) ? 1 : 0,
+          holiday: 0,
+          month: now.getMonth() + 1,
+          StartCos: Math.cos(2 * Math.PI * startHourNorm),
+          StartSin: Math.sin(2 * Math.PI * startHourNorm),
+          StartHourNorm: startHourNorm,
+          TimeSinceLastStop: 12,
+          sessionsToday: 1,
+          LastDuration: 8,
+          LastConsumedkWh: 25,
+          CarKW: connector?.powerKW || 7.2,
+          CarKWh: user.vehicleDetails.batteryCapacityKWh || 60,
+        }
+
+        const result = await api.getPrediction(predictionInput)
+        setPredictedDuration(result.predicted_value * 60)
+      } catch (e) {
+        console.error("Prediction API error:", e)
+        setPredictedDuration(null)
+      } finally {
+        setLoadingPrediction(false)
+      }
+    }
+
+    if (step === "details") {
+      fetchPrediction()
+    }
+  }, [step, batteryLevel, targetLevel, user?.vehicleDetails, station.id])
 
   // Derived scheduled Date objects for summary & validation
   const scheduledStart = React.useMemo(
@@ -238,7 +287,7 @@ export default function ReservationFlow({
     }
 
     // RELAX: prefer _id but allow id; warn instead of hard-block
-    const stationId = (station as any)._id || (station as any).id
+    const stationId = (station as any)._id || (station as any).id || station.stationId || station.name
     // Normalize userId
     const userId = (user as any).id || (user as any)._id
     if (!userId) {
@@ -252,19 +301,15 @@ export default function ReservationFlow({
     if (!isObjectId(stationId)) {
       console.warn("[ReservationFlow] stationId not 24-hex, proceeding anyway:", stationId)
     }
+const connectorId = chargerId
 
-    const connectorObj: any = station.connectors.find(
-      (c: any) => c.id === chargerId || c.backendId === chargerId || c._id === chargerId,
-    )
-    if (!connectorObj) {
-      setError("Selected connector not found.")
-      return
-    }
-    const connectorId = connectorObj.backendId || connectorObj._id || connectorObj.id
     if (!connectorId) {
       setError("Connector ID is missing. Cannot make a reservation.")
       return
     }
+
+    console.log("Sending connectorId:", connectorId);
+    console.log("Station connectors:", station.connectors);
 
     if (isNaN(scheduledStart.getTime())) {
       setError("Invalid scheduled start time.")
@@ -293,7 +338,6 @@ export default function ReservationFlow({
         startTime,
         endTime,
       }
-      console.debug("[ReservationFlow] payload final:", payload) // ADD
       const newRes = await api.createReservation(payload)
       setReservation(newRes)
       setStep("success")
@@ -392,7 +436,7 @@ export default function ReservationFlow({
                           </div>
                           <div className="flex items-center space-x-4">
                             <Badge className="bg-emerald-100 text-emerald-700">
-                              {connector?.type} • {connector?.power}kW
+                              {connector?.type} • {connector?.powerKW}kW
                             </Badge>
                             <div className="flex items-center space-x-1">
                               <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
@@ -469,25 +513,23 @@ export default function ReservationFlow({
                       {loadingEstimates ? (
                         <div className="flex items-center justify-center py-8">
                           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600"></div>
-                          <span className="ml-3 text-gray-600">Calculating estimates...</span>
+                          <span className="ml-3 text-gray-600">Calculating...</span>
                         </div>
                       ) : (
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                           <div className="text-center p-3 bg-emerald-50 rounded-lg">
-                            <div className="text-2xl font-bold text-emerald-600">{estimates.duration}min</div>
+                            <div className="text-2xl font-bold text-emerald-600">{estimatedDuration}min</div>
                             <div className="text-sm text-gray-600">Charging Time</div>
                           </div>
                           <div className="text-center p-3 bg-blue-50 rounded-lg">
-                            <div className="text-2xl font-bold text-blue-600">{estimates.cost} TND</div>
+                            <div className="text-2xl font-bold text-blue-600">{estimatedCost} TND</div>
                             <div className="text-sm text-gray-600">Estimated Cost</div>
                           </div>
-                          <div className="text-center p-3 bg-purple-50 rounded-lg">
-                            <div className="text-2xl font-bold text-purple-600">{estimates.energyNeeded} kWh</div>
-                            <div className="text-sm text-gray-600">Energy Needed</div>
-                          </div>
-                          <div className="text-center p-3 bg-orange-50 rounded-lg">
-                            <div className="text-2xl font-bold text-orange-600">{estimates.peakPower} kW</div>
-                            <div className="text-sm text-gray-600">Peak Power</div>
+                          <div className="text-center p-3 bg-teal-50 rounded-lg">
+                            <div className="text-2xl font-bold text-teal-600">
+                              {loadingPrediction ? '...' : predictedDuration ? `${predictedDuration.toFixed(0)}min` : 'N/A'}
+                            </div>
+                            <div className="text-sm text-gray-600">Predicted Session</div>
                           </div>
                         </div>
                       )}
@@ -742,11 +784,11 @@ export default function ReservationFlow({
                       <Separator />
                       <div className="flex justify-between items-center">
                         <span className="text-gray-600">Estimated Charging Time</span>
-                        <span className="font-medium">{estimates.duration} min</span>
+                        <span className="font-medium">{estimatedDuration} min</span>
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-gray-600">Estimated Cost</span>
-                        <span className="font-medium text-emerald-600">{estimates.cost} TND</span>
+                        <span className="font-medium text-emerald-600">{estimatedCost} TND</span>
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-gray-600">Payment Method</span>

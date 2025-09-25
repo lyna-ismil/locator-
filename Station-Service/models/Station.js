@@ -5,7 +5,7 @@ const { Schema } = mongoose
 const ALLOWED_CONNECTORS = [
   "CCS","CCS1","CCS2","TYPE2","TYPE1","CHADEMO","TESLA","GB_T","SCHUKO","UK_3_PIN"
 ]
-const CONNECTOR_STATUSES = ["Available","InUse","OutOfOrder"]
+const CONNECTOR_STATUSES = ["Available", "Unavailable", "InUse", "OutOfOrder", "Faulted"]
 
 // Connector subdocument
 // Changed to allow generated _id per connector (was _id: false)
